@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fish of Fortune - Modular Architecture</title>
+</head>
+<body>
+
+  <!-- 3D WebGL Canvas -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- UI Overlay -->
+  <div id="ui-container">
+    
+    <!-- TOP CENTER HUD -->
+    <div id="top-center-hud">
+      <!-- Coins Counter -->
+      <div id="coin-box">
+        🪙 <span id="coin-count">350</span>
+      </div>
+      
+      <!-- Progress Bar (Island Level) -->
+      <div id="progress-wrapper">
+        <div class="progress-bar-bg">
+          <div id="progress-fill"></div>
+          <span id="progress-text">Level 1: 0 / 12</span>
+        </div>
+      </div>
+
+      <!-- Spin Energy Bar (Spin Level Only) -->
+      <div id="spin-energy-wrapper" class="hidden">
+        <div class="spin-energy-bg">
+          <div id="spin-energy-fill"></div>
+          <span id="spin-energy-text">⚡ Spins: 5 / 50</span>
+        </div>
+      </div>
+
+      <!-- Box Opening Key HUD Overlay -->
+      <div id="box-hud-overlay" class="hidden">
+        <div class="box-hud-card">
+          <h2>📦 CHEST BONUS</h2>
+          <div id="key-hud">🔑 Choices Left: <span id="key-count">3</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM CENTER CONTROLS -->
+    <div id="bottom-center-hud">
+      <!-- Building Action Buttons -->
+      <div id="bottom-bar">
+        <button id="btn-dock" class="build-btn">Dock<br>(100 🪙)</button>
+        <button id="btn-lighthouse" class="build-btn">Lighthouse<br>(150 🪙)</button>
+        <button id="btn-boat" class="build-btn">Boat<br>(200 🪙)</button>
+      </div>
+
+      <!-- Trigger to open Spin Level -->
+      <div id="spin-bar" class="hidden">
+        <button id="btn-go-spin" class="spin-btn">🎰 Go to Spin Wheel</button>
+      </div>
+
+      <!-- Back to Island Button -->
+      <div id="back-island-bar" class="hidden">
+        <button id="btn-back-island" class="back-btn">🏝️ Back to Island</button>
+      </div>
+    </div>
+
+    <!-- LEVEL COMPLETE MODAL -->
+    <div id="level-complete-modal" class="hidden">
+      <div class="modal-card">
+        <div class="modal-icon">🎉</div>
+        <h2 id="complete-title">LEVEL 1 COMPLETE!</h2>
+        <p>You restored the island!</p>
+        <button id="btn-next-island" class="next-island-btn">Travel to Next Island 🚢</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,2282 @@
+﻿Recovering Three.js Project From ZIP
+https://gemini.google.com/app/5d59aeabd1d6d4b9
+
+
+User prompt: one last thing. this time it is about spin counts display. Can you make it so it starts like 10/50? because it starts 10/10 and if I get a +55 spins, it looks wrong
+Response: To make the spin HUD start at 10 / 50 and prevent accumulated spins (like +5 or +55) from overflowing a small 10 limit, update GameState.js and UIManager.js.
+1. Update GameState.js
+Add this.maxSpins = 50; to your initial state constructor:
+// src/core/GameState.js
+
+export class GameState {
+ constructor() {
+   // Economy & Progress
+   this.coins = 1000;
+   this.spins = 10;
+   this.maxSpins = 50; // 🎯 Set max capacity to 50
+   this.keys = 0;
+   this.stars = 0;
+   this.currentIslandLevel = 1;
+   
+   // ... rest of constructor
+ }
+ 
+ // ... rest of GameState
+}
+
+2. Update UIManager.js
+In UIManager.js, update the maxSpins fallback in render() so default rendering uses 50 instead of 10:
+// src/ui/UIManager.js
+
+render(state = gameState) {
+ if (!state) return;
+
+ // ... coins & level progress rendering ...
+
+ // 🎯 Spins / Energy HUD
+ const maxSpins = state.maxSpins ?? 50; // 👈 Updated fallback from 10 to 50
+ const currentSpins = state.spins ?? 0;
+
+ if (this.spinEnergyTextEl) {
+   this.spinEnergyTextEl.innerText = `⚡ Spins: ${currentSpins} / ${maxSpins}`;
+ }
+ if (this.spinEnergyFillEl) {
+   // Fill percentage clamped cleanly between 0% and 100%
+   const fillPercent = Math.min((currentSpins / maxSpins) * 100, 100);
+   this.spinEnergyFillEl.style.width = `${fillPercent}%`;
+ }
+
+ // ... rest of render()
+}
+
+What This Fixes
+* Startup HUD: Displays ⚡ Spins: 10 / 50 with the progress bar filled to 20% on initial load.
+* Rewards & Surpluses: Gaining spins (e.g. +5 or +55) will cleanly scale up to 50/50 without breaking the energy bar fill percentage.
+________________
+
+
+User prompt: One more thing right now, If I am in spin scene, and did not earn enough money, I may accidentally click on the go to island scene button. And if that happens, the user hits a wall, and cannot progress, can you add something to prevent that?
+Response: To prevent players from accidentally exiting the Spin Scene when they don't have enough coins to upgrade anything on the island, you can add a Navigation Guard to the btnBackIsland button inside UIManager.js.
+If the player tries to return to the island while below the cost of the cheapest building upgrade and they still have spins remaining, the game will block the transition and notify them to keep spinning.
+🛠️ The Fix for UIManager.js
+1. Add Helper to Find Lowest Upgrade Cost
+Add this helper method inside UIManager.js:
+/**
+* Calculates the lowest cost among remaining building upgrades
+*/
+getMinUpgradeCost(state = gameState) {
+ const maxLvl = state.MAX_BUILDING_LEVEL || 4;
+ const buildings = state.buildings || { dock: 0, lighthouse: 0, boat: 0 };
+
+ const dockCost = (buildings.dock || 0) < maxLvl 
+   ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('dock') : 100) 
+   : Infinity;
+
+ const lighthouseCost = (buildings.lighthouse || 0) < maxLvl 
+   ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('lighthouse') : 250) 
+   : Infinity;
+
+ const boatCost = (buildings.boat || 0) < maxLvl 
+   ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('boat') : 150) 
+   : Infinity;
+
+ return Math.min(dockCost, lighthouseCost, boatCost);
+}
+
+2. Update btnBackIsland Listener
+In bindEvents(), update the click handler for btnBackIsland:
+    if (this.btnBackIsland) {
+     this.btnBackIsland.addEventListener('click', () => {
+       const minCost = this.getMinUpgradeCost();
+       const currentCoins = gameState.coins ?? 0;
+       const currentSpins = gameState.spins ?? 0;
+
+       // 🔒 BLOCK GUARD: If player can't afford any upgrade BUT still has spins to use
+       if (currentCoins < minCost && currentSpins > 0) {
+         eventBus.emit('PLAY_SOUND', 'AU_Error'); // Optional error sound
+         eventBus.emit('UI_MESSAGE', { 
+           message: `Need at least ${minCost} 🪙 for upgrades! Keep spinning! ⚡` 
+         });
+
+         // Optional button shake indicator
+         this.btnBackIsland.classList.add('shake');
+         setTimeout(() => this.btnBackIsland.classList.remove('shake'), 400);
+         return; // Stop navigation
+       }
+
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       eventBus.emit('SWITCH_SCENE', 'island');
+     });
+   }
+
+How It Works:
+1. Prevents Soft-locks: If the player has 0 spins and < minCost coins, the guard lets them pass so they aren't trapped indefinitely.
+2. Prevents Accidental Misclicks: If they still have spins (spins > 0) and aren't ready to buy a building (coins < minCost), clicking "Back to Island" blocks navigation and pops up a banner reminding them to use their remaining spins.
+________________
+
+
+User prompt: can you add these to my current UI manager?
+Response: Here is your updated UIManager.js with the navigation guard integrated into btnBackIsland, along with the getMinUpgradeCost() helper method.
+// src/ui/UIManager.js
+import { eventBus } from '../core/EventBus.js';
+import { gameState } from '../core/GameState.js';
+
+export class UIManager {
+ constructor(mapSceneInstance = null) {
+   this.mapScene = mapSceneInstance;
+   this.previousCoins = gameState.coins ?? 0;
+   this.bindDOM();
+   this.bindEvents();
+   
+   // Auto-render debug panel on startup
+   this.renderDebugPanel();
+ }
+
+ setMapScene(mapSceneInstance) {
+   this.mapScene = mapSceneInstance;
+ }
+
+ bindDOM() {
+   this.topCenterHud = document.getElementById('top-center-hud');
+   this.bottomCenterHud = document.getElementById('bottom-center-hud');
+
+   this.coinBoxEl = document.getElementById('coin-box');
+   this.coinCountEl = document.getElementById('coin-count');
+   this.progressTextEl = document.getElementById('progress-text');
+   this.progressFillEl = document.getElementById('progress-fill');
+   this.progressWrapperEl = document.getElementById('progress-wrapper');
+
+   this.spinEnergyWrapperEl = document.getElementById('spin-energy-wrapper');
+   this.spinEnergyTextEl = document.getElementById('spin-energy-text');
+   this.spinEnergyFillEl = document.getElementById('spin-energy-fill');
+
+   this.boxHudOverlayEl = document.getElementById('box-hud-overlay');
+   this.keyCountEl = document.getElementById('key-count');
+
+   this.bottomBarEl = document.getElementById('bottom-bar');
+   this.spinBarEl = document.getElementById('spin-bar');
+   this.backIslandBarEl = document.getElementById('back-island-bar');
+
+   this.btnDock = document.getElementById('btn-dock');
+   this.btnLighthouse = document.getElementById('btn-lighthouse');
+   this.btnBoat = document.getElementById('btn-boat');
+
+   this.btnGoSpin = document.getElementById('btn-go-spin');
+   this.btnBackIsland = document.getElementById('btn-back-island');
+
+   this.levelCompleteModalEl = document.getElementById('level-complete-modal');
+   this.completeTitleEl = document.getElementById('complete-title');
+   this.btnNextIsland = document.getElementById('btn-next-island');
+ }
+
+ /**
+  * Calculates the lowest coin cost among remaining available building upgrades
+  */
+ getMinUpgradeCost(state = gameState) {
+   const maxLvl = state.MAX_BUILDING_LEVEL || 4;
+   const buildings = state.buildings || { dock: 0, lighthouse: 0, boat: 0 };
+
+   const dockCost = (buildings.dock || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('dock') : 100) 
+     : Infinity;
+
+   const lighthouseCost = (buildings.lighthouse || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('lighthouse') : 250) 
+     : Infinity;
+
+   const boatCost = (buildings.boat || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('boat') : 150) 
+     : Infinity;
+
+   return Math.min(dockCost, lighthouseCost, boatCost);
+ }
+
+ bindEvents() {
+   // Building Actions
+   if (this.btnDock) {
+     this.btnDock.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'dock' });
+     });
+   }
+   if (this.btnLighthouse) {
+     this.btnLighthouse.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'lighthouse' });
+     });
+   }
+   if (this.btnBoat) {
+     this.btnBoat.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'boat' });
+     });
+   }
+
+   // Scene Triggers
+   if (this.btnGoSpin) {
+     this.btnGoSpin.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       if (typeof gameState.resetSpinsOnEnter === 'function') {
+         gameState.resetSpinsOnEnter();
+       }
+       eventBus.emit('SWITCH_SCENE', 'spin');
+     });
+   }
+
+   if (this.btnBackIsland) {
+     this.btnBackIsland.addEventListener('click', () => {
+       const minCost = this.getMinUpgradeCost();
+       const currentCoins = gameState.coins ?? 0;
+       const currentSpins = gameState.spins ?? 0;
+
+       // 🔒 NAVIGATION GUARD: If player lacks coins for upgrades BUT still has spins left
+       if (currentCoins < minCost && currentSpins > 0) {
+         eventBus.emit('PLAY_SOUND', 'AU_Error');
+         eventBus.emit('UI_MESSAGE', { 
+           message: `Need at least ${minCost} 🪙 for upgrades! Keep spinning! ⚡` 
+         });
+
+         this.btnBackIsland.classList.add('shake');
+         setTimeout(() => this.btnBackIsland.classList.remove('shake'), 400);
+         return; // Stop navigation
+       }
+
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       eventBus.emit('SWITCH_SCENE', 'island');
+     });
+   }
+
+   if (this.btnNextIsland) {
+     this.btnNextIsland.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       eventBus.emit('TRIGGER_LEVEL_TRANSITION');
+     });
+   }
+
+   // Reactive State Listeners
+   eventBus.on('STATE_CHANGED', (state) => this.render(state));
+   eventBus.on('COINS_CHANGED', () => {
+     this.handleCoinChange();
+     this.render();
+   });
+   eventBus.on('BUILDING_UPGRADED', () => this.render());
+   eventBus.on('SPINS_CHANGED', () => this.render());
+ }
+
+ /**
+  * Renders Map Debugger buttons automatically in the top-left corner
+  */
+ renderDebugPanel() {
+   if (document.getElementById('debug-panel')) return;
+
+   const container = document.createElement('div');
+   container.id = 'debug-panel';
+   container.style.cssText = `
+     position: fixed;
+     top: 15px;
+     left: 15px;
+     z-index: 999999;
+     background: rgba(15, 23, 42, 0.9);
+     border: 2px solid #38bdf8;
+     padding: 12px;
+     border-radius: 8px;
+     display: flex;
+     flex-direction: column;
+     gap: 8px;
+     font-family: sans-serif;
+     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+   `;
+
+   container.innerHTML = `
+     <div style="color: #38bdf8; font-weight: bold; font-size: 13px; margin-bottom: 2px;">🛠 MAP DEBUGGER</div>
+     <button id="btn-dbg-map" style="cursor:pointer; padding:6px 12px; background:#0284c7; color:white; border:none; border-radius:4px; font-weight:bold;">View Map Scene</button>
+     <button id="btn-dbg-island" style="cursor:pointer; padding:6px 12px; background:#334155; color:white; border:none; border-radius:4px;">Back to Island</button>
+     <button id="btn-dbg-anim1" style="cursor:pointer; padding:6px 12px; background:#f59e0b; color:white; border:none; border-radius:4px;">Test: Level 1 ➔ 2</button>
+     <button id="btn-dbg-anim2" style="cursor:pointer; padding:6px 12px; background:#f59e0b; color:white; border:none; border-radius:4px;">Test: Level 2 ➔ 3</button>
+   `;
+
+   document.body.appendChild(container);
+
+   // Button Listeners
+   document.getElementById('btn-dbg-map').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+   };
+
+   document.getElementById('btn-dbg-island').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'island');
+   };
+
+   document.getElementById('btn-dbg-anim1').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+     const targetMapScene = this.mapScene || window.mapScene;
+     if (targetMapScene) {
+       targetMapScene.animateTravel(1, 2, () => console.log('Arrived at Island 2'));
+     } else {
+       console.warn('MapScene instance not bound to UIManager yet.');
+     }
+   };
+
+   document.getElementById('btn-dbg-anim2').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+     const targetMapScene = this.mapScene || window.mapScene;
+     if (targetMapScene) {
+       targetMapScene.animateTravel(2, 3, () => console.log('Arrived at Island 3'));
+     } else {
+       console.warn('MapScene instance not bound to UIManager yet.');
+     }
+   };
+ }
+
+ /**
+  * Checks coin gain delta and triggers the flying particle burst and HUD jiggle
+  */
+ handleCoinChange() {
+   const currentCoins = gameState.coins ?? 0;
+   const diff = currentCoins - this.previousCoins;
+
+   if (diff > 0) {
+     this.spawnFlyingCoins(Math.min(diff, 8), () => {
+       this.triggerCoinJiggle();
+     });
+   }
+
+   this.previousCoins = currentCoins;
+ }
+
+ /**
+  * Triggers the CSS scale/jiggle keyframe animation on the coin HUD element
+  */
+ triggerCoinJiggle() {
+   const target = this.coinBoxEl || this.coinCountEl;
+   if (!target) return;
+
+   target.classList.remove('coin-counter-jiggle');
+   void target.offsetWidth; 
+   target.classList.add('coin-counter-jiggle');
+ }
+
+ /**
+  * Spawns flying coin HTML elements from screen center toward the top coin box
+  */
+ spawnFlyingCoins(count = 5, onComplete) {
+   eventBus.emit('PLAY_SOUND', 'AU_Coin');
+   const targetEl = this.coinBoxEl || this.coinCountEl;
+   const targetRect = targetEl 
+     ? targetEl.getBoundingClientRect() 
+     : { left: window.innerWidth / 2, top: 30, width: 32, height: 32 };
+
+   const targetX = targetRect.left + targetRect.width / 2;
+   const targetY = targetRect.top + targetRect.height / 2;
+
+   const startX = window.innerWidth / 2;
+   const startY = window.innerHeight / 2;
+
+   let finishedCount = 0;
+
+   for (let i = 0; i < count; i++) {
+     setTimeout(() => {
+       const coin = document.createElement('div');
+       coin.className = 'flying-coin-particle';
+
+       const offsetX = (Math.random() - 0.5) * 80;
+       const offsetY = (Math.random() - 0.5) * 80;
+
+       const initialX = startX + offsetX;
+       const initialY = startY + offsetY;
+
+       coin.style.transform = `translate3d(${initialX}px, ${initialY}px, 0) scale(1.2)`;
+       document.body.appendChild(coin);
+
+       requestAnimationFrame(() => {
+         requestAnimationFrame(() => {
+           coin.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(0.35)`;
+         });
+       });
+
+       setTimeout(() => {
+         coin.style.opacity = '0';
+         setTimeout(() => {
+           if (coin.parentNode) coin.parentNode.removeChild(coin);
+           finishedCount++;
+
+           if (finishedCount === count && onComplete) {
+             onComplete();
+           }
+         }, 150);
+       }, 550);
+
+     }, i * 60);
+   }
+ }
+
+ render(state = gameState) {
+   if (!state) return;
+
+   // Coins & Keys
+   if (this.coinCountEl) this.coinCountEl.innerText = state.coins ?? 0;
+   if (this.keyCountEl) this.keyCountEl.innerText = state.keys ?? 0;
+
+   const buildings = state.buildings || { dock: 0, lighthouse: 0, boat: 0 };
+   const currentProgress = state.progress ?? (buildings.dock + buildings.lighthouse + buildings.boat);
+   const maxProgress = state.maxProgress ?? (state.MAX_BUILDING_LEVEL ? state.MAX_BUILDING_LEVEL * 3 : 12);
+   const currentLevel = state.currentIslandLevel ?? state.currentLevel ?? 1;
+
+   if (this.progressTextEl) {
+     this.progressTextEl.innerText = `Level ${currentLevel}: ${currentProgress} / ${maxProgress}`;
+   }
+   if (this.progressFillEl) {
+     this.progressFillEl.style.width = `${Math.min((currentProgress / maxProgress) * 100, 100)}%`;
+   }
+
+   // Spins / Energy HUD
+   const maxSpins = state.maxSpins ?? 50;
+   const currentSpins = state.spins ?? 0;
+   if (this.spinEnergyTextEl) {
+     this.spinEnergyTextEl.innerText = `⚡ Spins: ${currentSpins} / ${maxSpins}`;
+   }
+   if (this.spinEnergyFillEl) {
+     this.spinEnergyFillEl.style.width = `${Math.min((currentSpins / maxSpins) * 100, 100)}%`;
+   }
+
+   // Level Complete Modal
+   if (currentProgress >= maxProgress && this.levelCompleteModalEl) {
+     if (currentLevel < 3) {
+       if (this.completeTitleEl) this.completeTitleEl.innerText = `LEVEL ${currentLevel} COMPLETE!`;
+       if (this.btnNextIsland) this.btnNextIsland.innerText = "Travel to Next Island 🏝️";
+     } else {
+       if (this.completeTitleEl) this.completeTitleEl.innerText = `ALL LEVELS COMPLETE! 🎉`;
+       if (this.btnNextIsland) this.btnNextIsland.innerText = "Restart Game 🔄";
+     }
+     if (this.levelCompleteModalEl.classList.contains('hidden')) {
+       eventBus.emit('PLAY_SOUND', 'AU_Cheer');
+     }
+     this.levelCompleteModalEl.classList.remove('hidden');
+   } else if (this.levelCompleteModalEl) {
+     this.levelCompleteModalEl.classList.add('hidden');
+   }
+
+   // Dynamic Building Upgrade Costs & Buttons
+   const maxLvl = state.MAX_BUILDING_LEVEL || 4;
+   const dockLevel = buildings.dock || 0;
+   const lighthouseLevel = buildings.lighthouse || 0;
+   const boatLevel = buildings.boat || 0;
+
+   const dockCost = state.buildingCosts?.dock ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('dock') : 100);
+   const lighthouseCost = state.buildingCosts?.lighthouse ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('lighthouse') : 250);
+   const boatCost = state.buildingCosts?.boat ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('boat') : 150);
+
+   // Dock Button
+   if (this.btnDock) {
+     const isMax = dockLevel >= maxLvl;
+     this.btnDock.innerHTML = `Dock<br>${isMax ? '(MAX)' : `(${dockCost} 🪙)`}`;
+     this.btnDock.style.opacity = (!isMax && state.coins >= dockCost) ? '1' : '0.5';
+   }
+
+   // Lighthouse Button
+   if (this.btnLighthouse) {
+     const isMax = lighthouseLevel >= maxLvl;
+     this.btnLighthouse.innerHTML = `Lighthouse<br>${isMax ? '(MAX)' : `(${lighthouseCost} 🪙)`}`;
+     this.btnLighthouse.style.opacity = (!isMax && state.coins >= lighthouseCost) ? '1' : '0.5';
+   }
+
+   // Boat Button
+   if (this.btnBoat) {
+     const isMax = boatLevel >= maxLvl;
+     this.btnBoat.innerHTML = `Boat<br>${isMax ? '(MAX)' : `(${boatCost} 🪙)`}`;
+     this.btnBoat.style.opacity = (!isMax && state.coins >= boatCost) ? '1' : '0.5';
+   }
+
+   // Auto-trigger Spin button when broke
+   if (this.spinBarEl) {
+     const minCost = this.getMinUpgradeCost(state);
+
+     if (state.coins < minCost && currentProgress < maxProgress) {
+       this.spinBarEl.classList.remove('hidden');
+     } else {
+       this.spinBarEl.classList.add('hidden');
+     }
+   }
+ }
+
+ showSceneHUD(sceneKey) {
+   if (this.progressWrapperEl) this.progressWrapperEl.classList.add('hidden');
+   if (this.bottomBarEl) this.bottomBarEl.classList.add('hidden');
+   if (this.spinBarEl) this.spinBarEl.classList.add('hidden');
+   if (this.spinEnergyWrapperEl) this.spinEnergyWrapperEl.classList.add('hidden');
+   if (this.backIslandBarEl) this.backIslandBarEl.classList.add('hidden');
+   if (this.boxHudOverlayEl) this.boxHudOverlayEl.classList.add('hidden');
+
+   if (sceneKey === 'island') {
+     if (this.progressWrapperEl) this.progressWrapperEl.classList.remove('hidden');
+     if (this.bottomBarEl) this.bottomBarEl.classList.remove('hidden');
+   } else if (sceneKey === 'spin') {
+     if (this.spinEnergyWrapperEl) this.spinEnergyWrapperEl.classList.remove('hidden');
+     if (this.backIslandBarEl) this.backIslandBarEl.classList.remove('hidden');
+   } else if (sceneKey === 'box') {
+     if (this.boxHudOverlayEl) this.boxHudOverlayEl.classList.remove('hidden');
+   }
+ }
+}
+
+// Standalone Helper Export
+export function createDebugPanel(eventBus, mapScene) {
+ if (window.uiManager) {
+   window.uiManager.setMapScene(mapScene);
+   window.uiManager.renderDebugPanel();
+ }
+}
+
+________________
+
+
+User prompt: Can you also add buttons for box scene and spin scene inside the map debugger? I removed the log camera pos.
+Response: Here is the updated UIManager.js with Spin Scene and Box Scene shortcut buttons added directly into the Map Debugger panel.
+// src/ui/UIManager.js
+import { eventBus } from '../core/EventBus.js';
+import { gameState } from '../core/GameState.js';
+
+export class UIManager {
+ constructor(mapSceneInstance = null) {
+   this.mapScene = mapSceneInstance;
+   this.previousCoins = gameState.coins ?? 0;
+   this.bindDOM();
+   this.bindEvents();
+   
+   // Auto-render debug panel on startup
+   this.renderDebugPanel();
+ }
+
+ setMapScene(mapSceneInstance) {
+   this.mapScene = mapSceneInstance;
+ }
+
+ bindDOM() {
+   this.topCenterHud = document.getElementById('top-center-hud');
+   this.bottomCenterHud = document.getElementById('bottom-center-hud');
+
+   this.coinBoxEl = document.getElementById('coin-box');
+   this.coinCountEl = document.getElementById('coin-count');
+   this.progressTextEl = document.getElementById('progress-text');
+   this.progressFillEl = document.getElementById('progress-fill');
+   this.progressWrapperEl = document.getElementById('progress-wrapper');
+
+   this.spinEnergyWrapperEl = document.getElementById('spin-energy-wrapper');
+   this.spinEnergyTextEl = document.getElementById('spin-energy-text');
+   this.spinEnergyFillEl = document.getElementById('spin-energy-fill');
+
+   this.boxHudOverlayEl = document.getElementById('box-hud-overlay');
+   this.keyCountEl = document.getElementById('key-count');
+
+   this.bottomBarEl = document.getElementById('bottom-bar');
+   this.spinBarEl = document.getElementById('spin-bar');
+   this.backIslandBarEl = document.getElementById('back-island-bar');
+
+   this.btnDock = document.getElementById('btn-dock');
+   this.btnLighthouse = document.getElementById('btn-lighthouse');
+   this.btnBoat = document.getElementById('btn-boat');
+
+   this.btnGoSpin = document.getElementById('btn-go-spin');
+   this.btnBackIsland = document.getElementById('btn-back-island');
+
+   this.levelCompleteModalEl = document.getElementById('level-complete-modal');
+   this.completeTitleEl = document.getElementById('complete-title');
+   this.btnNextIsland = document.getElementById('btn-next-island');
+ }
+
+ /**
+  * Calculates the lowest coin cost among remaining available building upgrades
+  */
+ getMinUpgradeCost(state = gameState) {
+   const maxLvl = state.MAX_BUILDING_LEVEL || 4;
+   const buildings = state.buildings || { dock: 0, lighthouse: 0, boat: 0 };
+
+   const dockCost = (buildings.dock || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('dock') : 100) 
+     : Infinity;
+
+   const lighthouseCost = (buildings.lighthouse || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('lighthouse') : 250) 
+     : Infinity;
+
+   const boatCost = (buildings.boat || 0) < maxLvl 
+     ? (typeof state.getUpgradeCost === 'function' ? state.getUpgradeCost('boat') : 150) 
+     : Infinity;
+
+   return Math.min(dockCost, lighthouseCost, boatCost);
+ }
+
+ bindEvents() {
+   // Building Actions
+   if (this.btnDock) {
+     this.btnDock.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'dock' });
+     });
+   }
+   if (this.btnLighthouse) {
+     this.btnLighthouse.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'lighthouse' });
+     });
+   }
+   if (this.btnBoat) {
+     this.btnBoat.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Popping');
+       eventBus.emit('BUY_BUILDING', { type: 'boat' });
+     });
+   }
+
+   // Scene Triggers
+   if (this.btnGoSpin) {
+     this.btnGoSpin.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       if (typeof gameState.resetSpinsOnEnter === 'function') {
+         gameState.resetSpinsOnEnter();
+       }
+       eventBus.emit('SWITCH_SCENE', 'spin');
+     });
+   }
+
+   if (this.btnBackIsland) {
+     this.btnBackIsland.addEventListener('click', () => {
+       const minCost = this.getMinUpgradeCost();
+       const currentCoins = gameState.coins ?? 0;
+       const currentSpins = gameState.spins ?? 0;
+
+       // 🔒 NAVIGATION GUARD: If player lacks coins for upgrades BUT still has spins left
+       if (currentCoins < minCost && currentSpins > 0) {
+         eventBus.emit('PLAY_SOUND', 'AU_Error');
+         eventBus.emit('UI_MESSAGE', { 
+           message: `Need at least ${minCost} 🪙 for upgrades! Keep spinning! ⚡` 
+         });
+
+         this.btnBackIsland.classList.add('shake');
+         setTimeout(() => this.btnBackIsland.classList.remove('shake'), 400);
+         return; // Stop navigation
+       }
+
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       eventBus.emit('SWITCH_SCENE', 'island');
+     });
+   }
+
+   if (this.btnNextIsland) {
+     this.btnNextIsland.addEventListener('click', () => {
+       eventBus.emit('PLAY_SOUND', 'AU_Click');
+       eventBus.emit('TRIGGER_LEVEL_TRANSITION');
+     });
+   }
+
+   // Reactive State Listeners
+   eventBus.on('STATE_CHANGED', (state) => this.render(state));
+   eventBus.on('COINS_CHANGED', () => {
+     this.handleCoinChange();
+     this.render();
+   });
+   eventBus.on('BUILDING_UPGRADED', () => this.render());
+   eventBus.on('SPINS_CHANGED', () => this.render());
+ }
+
+ /**
+  * Renders Map Debugger buttons automatically in the top-left corner
+  */
+ renderDebugPanel() {
+   if (document.getElementById('debug-panel')) return;
+
+   const container = document.createElement('div');
+   container.id = 'debug-panel';
+   container.style.cssText = `
+     position: fixed;
+     top: 15px;
+     left: 15px;
+     z-index: 999999;
+     background: rgba(15, 23, 42, 0.9);
+     border: 2px solid #38bdf8;
+     padding: 12px;
+     border-radius: 8px;
+     display: flex;
+     flex-direction: column;
+     gap: 8px;
+     font-family: sans-serif;
+     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+   `;
+
+   container.innerHTML = `
+     <div style="color: #38bdf8; font-weight: bold; font-size: 13px; margin-bottom: 2px;">🛠 MAP DEBUGGER</div>
+     <button id="btn-dbg-map" style="cursor:pointer; padding:6px 12px; background:#0284c7; color:white; border:none; border-radius:4px; font-weight:bold;">View Map Scene</button>
+     <button id="btn-dbg-island" style="cursor:pointer; padding:6px 12px; background:#334155; color:white; border:none; border-radius:4px;">Back to Island</button>
+     <button id="btn-dbg-spin" style="cursor:pointer; padding:6px 12px; background:#10b981; color:white; border:none; border-radius:4px;">Go to Spin Scene</button>
+     <button id="btn-dbg-box" style="cursor:pointer; padding:6px 12px; background:#8b5cf6; color:white; border:none; border-radius:4px;">Go to Box Scene</button>
+     <button id="btn-dbg-anim1" style="cursor:pointer; padding:6px 12px; background:#f59e0b; color:white; border:none; border-radius:4px;">Test: Level 1 ➔ 2</button>
+     <button id="btn-dbg-anim2" style="cursor:pointer; padding:6px 12px; background:#f59e0b; color:white; border:none; border-radius:4px;">Test: Level 2 ➔ 3</button>
+   `;
+
+   document.body.appendChild(container);
+
+   // Button Listeners
+   document.getElementById('btn-dbg-map').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+   };
+
+   document.getElementById('btn-dbg-island').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'island');
+   };
+
+   document.getElementById('btn-dbg-spin').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'spin');
+   };
+
+   document.getElementById('btn-dbg-box').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'box');
+   };
+
+   document.getElementById('btn-dbg-anim1').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+     const targetMapScene = this.mapScene || window.mapScene;
+     if (targetMapScene) {
+       targetMapScene.animateTravel(1, 2, () => console.log('Arrived at Island 2'));
+     } else {
+       console.warn('MapScene instance not bound to UIManager yet.');
+     }
+   };
+
+   document.getElementById('btn-dbg-anim2').onclick = () => {
+     eventBus.emit('PLAY_SOUND', 'AU_Click');
+     eventBus.emit('SWITCH_SCENE', 'map');
+     const targetMapScene = this.mapScene || window.mapScene;
+     if (targetMapScene) {
+       targetMapScene.animateTravel(2, 3, () => console.log('Arrived at Island 3'));
+     } else {
+       console.warn('MapScene instance not bound to UIManager yet.');
+     }
+   };
+ }
+
+ /**
+  * Checks coin gain delta and triggers the flying particle burst and HUD jiggle
+  */
+ handleCoinChange() {
+   const currentCoins = gameState.coins ?? 0;
+   const diff = currentCoins - this.previousCoins;
+
+   if (diff > 0) {
+     this.spawnFlyingCoins(Math.min(diff, 8), () => {
+       this.triggerCoinJiggle();
+     });
+   }
+
+   this.previousCoins = currentCoins;
+ }
+
+ /**
+  * Triggers the CSS scale/jiggle keyframe animation on the coin HUD element
+  */
+ triggerCoinJiggle() {
+   const target = this.coinBoxEl || this.coinCountEl;
+   if (!target) return;
+
+   target.classList.remove('coin-counter-jiggle');
+   void target.offsetWidth; 
+   target.classList.add('coin-counter-jiggle');
+ }
+
+ /**
+  * Spawns flying coin HTML elements from screen center toward the top coin box
+  */
+ spawnFlyingCoins(count = 5, onComplete) {
+   eventBus.emit('PLAY_SOUND', 'AU_Coin');
+   const targetEl = this.coinBoxEl || this.coinCountEl;
+   const targetRect = targetEl 
+     ? targetEl.getBoundingClientRect() 
+     : { left: window.innerWidth / 2, top: 30, width: 32, height: 32 };
+
+   const targetX = targetRect.left + targetRect.width / 2;
+   const targetY = targetRect.top + targetRect.height / 2;
+
+   const startX = window.innerWidth / 2;
+   const startY = window.innerHeight / 2;
+
+   let finishedCount = 0;
+
+   for (let i = 0; i < count; i++) {
+     setTimeout(() => {
+       const coin = document.createElement('div');
+       coin.className = 'flying-coin-particle';
+
+       const offsetX = (Math.random() - 0.5) * 80;
+       const offsetY = (Math.random() - 0.5) * 80;
+
+       const initialX = startX + offsetX;
+       const initialY = startY + offsetY;
+
+       coin.style.transform = `translate3d(${initialX}px, ${initialY}px, 0) scale(1.2)`;
+       document.body.appendChild(coin);
+
+       requestAnimationFrame(() => {
+         requestAnimationFrame(() => {
+           coin.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(0.35)`;
+         });
+       });
+
+       setTimeout(() => {
+         coin.style.opacity = '0';
+         setTimeout(() => {
+           if (coin.parentNode) coin.parentNode.removeChild(coin);
+           finishedCount++;
+
+           if (finishedCount === count && onComplete) {
+             onComplete();
+           }
+         }, 150);
+       }, 550);
+
+     }, i * 60);
+   }
+ }
+
+ render(state = gameState) {
+   if (!state) return;
+
+   // Coins & Keys
+   if (this.coinCountEl) this.coinCountEl.innerText = state.coins ?? 0;
+   if (this.keyCountEl) this.keyCountEl.innerText = state.keys ?? 0;
+
+   const buildings = state.buildings || { dock: 0, lighthouse: 0, boat: 0 };
+   const currentProgress = state.progress ?? (buildings.dock + buildings.lighthouse + buildings.boat);
+   const maxProgress = state.maxProgress ?? (state.MAX_BUILDING_LEVEL ? state.MAX_BUILDING_LEVEL * 3 : 12);
+   const currentLevel = state.currentIslandLevel ?? state.currentLevel ?? 1;
+
+   if (this.progressTextEl) {
+     this.progressTextEl.innerText = `Level ${currentLevel}: ${currentProgress} / ${maxProgress}`;
+   }
+   if (this.progressFillEl) {
+     this.progressFillEl.style.width = `${Math.min((currentProgress / maxProgress) * 100, 100)}%`;
+   }
+
+   // Spins / Energy HUD
+   const maxSpins = state.maxSpins ?? 50;
+   const currentSpins = state.spins ?? 0;
+   if (this.spinEnergyTextEl) {
+     this.spinEnergyTextEl.innerText = `⚡ Spins: ${currentSpins} / ${maxSpins}`;
+   }
+   if (this.spinEnergyFillEl) {
+     this.spinEnergyFillEl.style.width = `${Math.min((currentSpins / maxSpins) * 100, 100)}%`;
+   }
+
+   // Level Complete Modal
+   if (currentProgress >= maxProgress && this.levelCompleteModalEl) {
+     if (currentLevel < 3) {
+       if (this.completeTitleEl) this.completeTitleEl.innerText = `LEVEL ${currentLevel} COMPLETE!`;
+       if (this.btnNextIsland) this.btnNextIsland.innerText = "Travel to Next Island 🏝️";
+     } else {
+       if (this.completeTitleEl) this.completeTitleEl.innerText = `ALL LEVELS COMPLETE! 🎉`;
+       if (this.btnNextIsland) this.btnNextIsland.innerText = "Restart Game 🔄";
+     }
+     if (this.levelCompleteModalEl.classList.contains('hidden')) {
+       eventBus.emit('PLAY_SOUND', 'AU_Cheer');
+     }
+     this.levelCompleteModalEl.classList.remove('hidden');
+   } else if (this.levelCompleteModalEl) {
+     this.levelCompleteModalEl.classList.add('hidden');
+   }
+
+   // Dynamic Building Upgrade Costs & Buttons
+   const maxLvl = state.MAX_BUILDING_LEVEL || 4;
+   const dockLevel = buildings.dock || 0;
+   const lighthouseLevel = buildings.lighthouse || 0;
+   const boatLevel = buildings.boat || 0;
+
+   const dockCost = state.buildingCosts?.dock ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('dock') : 100);
+   const lighthouseCost = state.buildingCosts?.lighthouse ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('lighthouse') : 250);
+   const boatCost = state.buildingCosts?.boat ?? (typeof gameState.getUpgradeCost === 'function' ? gameState.getUpgradeCost('boat') : 150);
+
+   // Dock Button
+   if (this.btnDock) {
+     const isMax = dockLevel >= maxLvl;
+     this.btnDock.innerHTML = `Dock<br>${isMax ? '(MAX)' : `(${dockCost} 🪙)`}`;
+     this.btnDock.style.opacity = (!isMax && state.coins >= dockCost) ? '1' : '0.5';
+   }
+
+   // Lighthouse Button
+   if (this.btnLighthouse) {
+     const isMax = lighthouseLevel >= maxLvl;
+     this.btnLighthouse.innerHTML = `Lighthouse<br>${isMax ? '(MAX)' : `(${lighthouseCost} 🪙)`}`;
+     this.btnLighthouse.style.opacity = (!isMax && state.coins >= lighthouseCost) ? '1' : '0.5';
+   }
+
+   // Boat Button
+   if (this.btnBoat) {
+     const isMax = boatLevel >= maxLvl;
+     this.btnBoat.innerHTML = `Boat<br>${isMax ? '(MAX)' : `(${boatCost} 🪙)`}`;
+     this.btnBoat.style.opacity = (!isMax && state.coins >= boatCost) ? '1' : '0.5';
+   }
+
+   // Auto-trigger Spin button when broke
+   if (this.spinBarEl) {
+     const minCost = this.getMinUpgradeCost(state);
+
+     if (state.coins < minCost && currentProgress < maxProgress) {
+       this.spinBarEl.classList.remove('hidden');
+     } else {
+       this.spinBarEl.classList.add('hidden');
+     }
+   }
+ }
+
+ showSceneHUD(sceneKey) {
+   if (this.progressWrapperEl) this.progressWrapperEl.classList.add('hidden');
+   if (this.bottomBarEl) this.bottomBarEl.classList.add('hidden');
+   if (this.spinBarEl) this.spinBarEl.classList.add('hidden');
+   if (this.spinEnergyWrapperEl) this.spinEnergyWrapperEl.classList.add('hidden');
+   if (this.backIslandBarEl) this.backIslandBarEl.classList.add('hidden');
+   if (this.boxHudOverlayEl) this.boxHudOverlayEl.classList.add('hidden');
+
+   if (sceneKey === 'island') {
+     if (this.progressWrapperEl) this.progressWrapperEl.classList.remove('hidden');
+     if (this.bottomBarEl) this.bottomBarEl.classList.remove('hidden');
+   } else if (sceneKey === 'spin') {
+     if (this.spinEnergyWrapperEl) this.spinEnergyWrapperEl.classList.remove('hidden');
+     if (this.backIslandBarEl) this.backIslandBarEl.classList.remove('hidden');
+   } else if (sceneKey === 'box') {
+     if (this.boxHudOverlayEl) this.boxHudOverlayEl.classList.remove('hidden');
+   }
+ }
+}
+
+// Standalone Helper Export
+export function createDebugPanel(eventBus, mapScene) {
+ if (window.uiManager) {
+   window.uiManager.setMapScene(mapScene);
+   window.uiManager.renderDebugPanel();
+ }
+}
+
+________________
+
+
+User prompt: can you lower the global audio volume in the to half?
+Response: Here is the updated AudioManager.js.
+A GainNode (this.masterGain) has been added between the audio sources and the output destination, set to 0.5 (50% volume). A setVolume() helper function was also added in case you ever want to adjust it dynamically at runtime.
+// src/core/AudioManager.js
+import { eventBus } from './EventBus.js';
+
+export class AudioManager {
+ constructor() {
+   this.ctx = null;
+   this.masterGain = null; // 🔊 Master Gain Node for global volume
+   this.buffers = new Map();
+   this.isUnlocked = false;
+
+   this.soundManifest = {
+     AU_Spin: './public/sounds/AU_Spin.mp3',
+     AU_Spin_Click: './public/sounds/AU_Spin_Click.mp3',
+     AU_Popping: './public/sounds/AU_Popping.mp3',
+     AU_Cheer: './public/sounds/AU_Cheer.mp3',
+     AU_Box_Open: './public/sounds/AU_Box_Open.mp3',
+     AU_Click: './public/sounds/AU_Click.mp3',
+     AU_Coin: './public/sounds/AU_Coin.mp3',
+   };
+
+   this.init();
+ }
+
+ init() {
+   // 1. Listen for global sound emission events
+   eventBus.on('PLAY_SOUND', (soundKey) => this.playSound(soundKey));
+
+   // 2. Setup user interaction listener to unlock AudioContext on first click/touch
+   const unlockAudio = () => {
+     if (!this.ctx) {
+       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+       if (AudioContextClass) {
+         this.ctx = new AudioContextClass();
+
+         // 🔊 Create Master Gain Node & set volume to 50% (0.5)
+         this.masterGain = this.ctx.createGain();
+         this.masterGain.gain.value = 0.5;
+         this.masterGain.connect(this.ctx.destination);
+
+         this.preloadSounds();
+       }
+     }
+
+     if (this.ctx && this.ctx.state === 'suspended') {
+       this.ctx.resume();
+     }
+
+     this.isUnlocked = true;
+     window.removeEventListener('pointerdown', unlockAudio);
+     window.removeEventListener('keydown', unlockAudio);
+   };
+
+   window.addEventListener('pointerdown', unlockAudio);
+   window.addEventListener('keydown', unlockAudio);
+ }
+
+ /**
+  * Preloads and decodes sound files into memory buffers
+  */
+ async preloadSounds() {
+   for (const [key, path] of Object.entries(this.soundManifest)) {
+     try {
+       const response = await fetch(path);
+       const arrayBuffer = await response.arrayBuffer();
+       const decodedData = await this.ctx.decodeAudioData(arrayBuffer);
+       this.buffers.set(key, decodedData);
+     } catch (err) {
+       console.warn(`[AudioManager] Failed to load sound '${key}' from ${path}`, err);
+     }
+   }
+ }
+
+ /**
+  * Plays a preloaded sound buffer routed through the Master Gain
+  */
+ playSound(key) {
+   if (!this.ctx || this.ctx.state !== 'running') return;
+
+   const buffer = this.buffers.get(key);
+   if (!buffer) return;
+
+   const source = this.ctx.createBufferSource();
+   source.buffer = buffer;
+
+   // 🔊 Route audio through masterGain node instead of directly to destination
+   if (this.masterGain) {
+     source.connect(this.masterGain);
+   } else {
+     source.connect(this.ctx.destination);
+   }
+
+   source.start(0);
+ }
+
+ /**
+  * Dynamically adjust global volume on the fly (0.0 to 1.0)
+  */
+ setVolume(volume = 0.5) {
+   if (this.masterGain) {
+     this.masterGain.gain.value = Math.max(0, Math.min(1, volume));
+   }
+ }
+}
+
+// Export singleton instance
+export const audioManager = new AudioManager();
+
+________________
+
+
+User prompt: I am having problems controlling directional light, skylight, sky color, and background color in all of my scenes, can you make me understand which settings controls what in my level config and IslandScene? I want to start with level1. in this scene there are no skylight and no shadows from directional light
+Response: Here is a clear breakdown of how your lighting, sky, and background configuration works, why LIGHTING_CONFIGS is currently being ignored in IslandScene, and why shadows aren't displaying in Level 1.
+1. What Controls What?
+Currently, there is a disconnect between your config files and IslandScene.js.
+
+
+Configuration / File
+	What It Controls
+	Current Status in IslandScene
+	LEVEL_CONFIGS
+	Gameplay data per island (Camera position, map Y-offset, building costs, ground/sea color values for custom shaders).
+	Active for game logic and procedural material colors. Does not control lighting.
+	LIGHTING_CONFIGS
+	Central lighting profiles (backgroundColor, skylight, directional intensity/color/shadows) per scene (island, spin, box).
+	❌ Ignored in IslandScene! SpinScene calls applyLightingConfig('spin'), but IslandScene never calls applyLightingConfig('island').
+	IslandScene.js
+	Creates and manages the 3D scene objects.
+	⚠️ Hardcodes its own lights and overrides backgroundColor by adding a physical Sky shader box object.
+	2. Why Skylight & Background Color Aren't Working
+In IslandScene.js, your constructor manually runs this.setupSkylight() and this.setupSkybox():
+// ❌ Hardcoded inside setupSkylight() in IslandScene.js:
+const skylight = new THREE.HemisphereLight(0x38bdf8, 0xfcd34d, 0.95);
+
+1. Skylight Override: IslandScene creates a hardcoded HemisphereLight(0x38bdf8, 0xfcd34d, 0.95) instead of reading skyColor, groundColor, and intensity from LIGHTING_CONFIGS.island.skylight.
+2. Background Color Override: setupSkybox() adds a physical procedural Sky mesh object scaled to 450000 units. This physical sky dome visually blocks and replaces any backgroundColor set on scene.background.
+3. Why Directional Light Shadows Are Missing in Level 1
+Even though sunLight.castShadow = true is set in setupSkylight(), shadows usually disappear in Three.js for three specific reasons:
+Reason A: Global Renderer ShadowMap is Disabled
+In your main setup file (where THREE.WebGLRenderer is created), shadow mapping must be explicitly enabled:
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Optional for soft shadows
+
+If renderer.shadowMap.enabled is false, no shadows will draw anywhere in the scene regardless of light settings.
+Reason B: Sun Light Position Moves Outside the Shadow Frustum
+In setupSkybox(), you recalculate the light position based on spherical coordinates:
+this.sunLight.position.copy(sunPosition).multiplyScalar(50);
+
+This places sunLight at approximately (13.5, 44.1, -19.2). However, your shadow camera bounding box is set to 15 units:
+const shadowBoxSize = 15;
+sunLight.shadow.camera.left = -shadowBoxSize;
+sunLight.shadow.camera.right = shadowBoxSize;
+...
+
+If the island mesh or buildings lie outside this 30×30 unit orthographic shadow box from the sun's perspective, shadows are clipped and will not render.
+Reason C: GLTF Model Materials (Unlit Materials)
+If island_1.glb was exported from Blender with Unlit / Basic materials, Three.js imports them as MeshBasicMaterial. MeshBasicMaterial does not receive shadows or react to lights.
+🛠️ The Fix: Clean Integration for IslandScene.js
+Here is the updated IslandScene.js that connects to LIGHTING_CONFIGS.island, centers the shadow camera over the island, and properly enables lighting and shadows:
+import * as THREE from 'three';
+import { BaseScene } from './BaseScene.js';
+import { LEVEL_CONFIGS, LIGHTING_CONFIGS } from '../config/LevelConfigs.js';
+import { assetLoader } from '../loaders/AssetLoader.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+
+export class IslandScene extends BaseScene {
+ constructor() {
+   super();
+
+   this.buildingMeshes = {
+     dock: null,
+     lighthouse: null,
+     boat: null
+   };
+
+   this.islandModel = null;
+   
+   // 1. Apply central config settings
+   this.initLighting();
+   
+   // 2. Load base island terrain
+   this.loadIslandModel();
+ }
+
+ initLighting() {
+   const config = LIGHTING_CONFIGS.island;
+
+   // 💡 Skylight (Hemisphere Light) from Config
+   const skylightConfig = config.skylight;
+   this.skylight = new THREE.HemisphereLight(
+     skylightConfig.skyColor,
+     skylightConfig.groundColor,
+     skylightConfig.intensity
+   );
+   this.skylight.position.set(0, 50, 0);
+   this.group.add(this.skylight);
+
+   // ☀️ Directional Light (Sun Light) from Config
+   const dirConfig = config.directional;
+   this.sunLight = new THREE.DirectionalLight(dirConfig.color, dirConfig.intensity);
+   this.sunLight.position.set(...dirConfig.position);
+   this.sunLight.castShadow = dirConfig.castShadow;
+
+   // 🎯 Shadow Camera Setup
+   this.sunLight.shadow.mapSize.width = 2048;
+   this.sunLight.shadow.mapSize.height = 2048;
+   this.sunLight.shadow.camera.near = 0.5;
+   this.sunLight.shadow.camera.far = 150;
+
+   // Expand frustum size to cover island model completely
+   const shadowBoxSize = 25; 
+   this.sunLight.shadow.camera.left = -shadowBoxSize;
+   this.sunLight.shadow.camera.right = shadowBoxSize;
+   this.sunLight.shadow.camera.top = shadowBoxSize;
+   this.sunLight.shadow.camera.bottom = -shadowBoxSize;
+   this.sunLight.shadow.bias = -0.0005;
+
+   this.group.add(this.sunLight);
+
+   // Optional: Setup Skybox Shader (Comment out if using static scene.background color)
+   this.setupSkybox();
+ }
+
+ setupSkybox() {
+   const sky = new Sky();
+   sky.scale.setScalar(450000);
+   this.group.add(sky);
+
+   const skyUniforms = sky.material.uniforms;
+   skyUniforms['turbidity'].value = 2.2;
+   skyUniforms['rayleigh'].value = 0.8;
+   skyUniforms['mieCoefficient'].value = 0.003;
+   skyUniforms['mieDirectionalG'].value = 0.85;
+
+   const sunPosition = new THREE.Vector3();
+   const elevation = 62;
+   const azimuth = 145;
+
+   const phi = THREE.MathUtils.degToRad(90 - elevation);
+   const theta = THREE.MathUtils.degToRad(azimuth);
+
+   sunPosition.setFromSphericalCoords(1, phi, theta);
+   skyUniforms['sunPosition'].value.copy(sunPosition);
+ }
+
+ async loadIslandModel() {
+   try {
+     this.islandModel = await assetLoader.loadGLTF('./public/models/island_1.glb');
+
+     this.islandModel.traverse((child) => {
+       if (child.isMesh) {
+         child.castShadow = true;
+         child.receiveShadow = true;
+         
+         // Ensure imported materials react to light & shadows
+         if (child.material && child.material.isMeshBasicMaterial) {
+           child.material = new THREE.MeshStandardMaterial({
+             color: child.material.color,
+             map: child.material.map || null
+           });
+         }
+       }
+     });
+
+     this.islandModel.position.set(0, 0, 0);
+     this.group.add(this.islandModel);
+     console.log('✅ Island 1 loaded successfully!');
+   } catch (err) {
+     console.warn('GLTF failed to load, falling back to primitive island:', err);
+     this.buildFallbackIsland();
+   }
+ }
+
+ // ... keep remaining building logic unchanged ...
+}
+
+________________
+
+
+User prompt: Few questions: 3. Why Directional Light Shadows Are Missing in Level 1 Even though sunLight.castShadow = true is set in setupSkylight(), shadows usually disappear in Three.js for three specific reasons: Reason A: Global Renderer ShadowMap is Disabled In your main setup file (where THREE.WebGLRenderer is created), shadow mapping must be explicitly enabled: JavaScript renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Optional for soft shadows If renderer.shadowMap.enabled is false, no shadows will draw anywhere in the scene regardless of light settings. Reason B: Sun Light Position Moves Outside the Shadow Frustum In setupSkybox(), you recalculate the light position based on spherical coordinates: JavaScript this.sunLight.position.copy(sunPosition).multiplyScalar(50); This places sunLight at approximately (13.5, 44.1, -19.2). However, your shadow camera bounding box is set to 15 units: JavaScript const shadowBoxSize = 15; sunLight.shadow.camera.left = -shadowBoxSize; sunLight.shadow.camera.right = shadowBoxSize; ... If the island mesh or buildings lie outside this $30 \times 30$ unit orthographic shadow box from the sun's perspective, shadows are clipped and will not render. Where would I make the shadow map enabled?
+Response: You should enable shadowMap right where your THREE.WebGLRenderer is created and initialized.
+In your project, this is typically in your entry file—such as main.js, App.js, or Game.js.
+Where to Add It
+Find the line where you initialize new THREE.WebGLRenderer(...) and add the two shadow configuration lines directly beneath it:
+// 1. Create your WebGLRenderer instance
+const renderer = new THREE.WebGLRenderer({ 
+ canvas: document.getElementById('webgl-canvas'), // or document.querySelector(...)
+ antialias: true 
+});
+
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+// -------------------------------------------------------------
+// 🔑 ENABLE SHADOW MAP HERE
+// -------------------------------------------------------------
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Enables smooth, soft shadow edges
+
+Quick Troubleshooting Checklist for Shadows
+Once you add renderer.shadowMap.enabled = true, verify these three points if shadows still don't show up immediately:
+1. Check Canvas Clearing: Ensure your render loop is calling renderer.render(scene, camera) every frame.
+2. Check Mesh Flags: Ensure both the casting mesh (e.g., buildings/trees) has child.castShadow = true and the receiving mesh (e.g., ground/island base) has child.receiveShadow = true.
+3. Shadow Camera Helper (Debugging): If you're unsure where the shadow box is pointing, temporarily add a helper below your light in IslandScene.js:
+const shadowHelper = new THREE.CameraHelper(this.sunLight.shadow.camera);
+this.group.add(shadowHelper);
+
+This will draw a wireframe box showing the exact region where shadows are calculated.
+________________
+
+
+User prompt: Yes this is calling it. Can you add the suggestions you gave me to this? and may shadows be washed out becuase of skylight settings or intensity being high?
+Response: Why Your Shadows Are Washed Out
+Yes, high skylight and ambient light intensity will absolutely wash out shadows.
+Shadows in Three.js are created by the directional light being blocked. The "darkness" of a shadow depends entirely on how much ambient / skylight is filling in those unlit areas:
+   1. Double Lighting Conflict: In App.js, you have an AmbientLight set to 0.8 intensity. At the same time, IslandScene.js creates its own HemisphereLight (skylight) with 0.95 intensity.
+   2. Result: Your total ambient scene lighting is 1.75! Because the unlit shadow areas are receiving so much ambient light from both sources, the shadows look flat, faint, or completely invisible.
+To fix this, we should lower the global ambient light in App.js (e.g., down to 0.3) so the directional light can create crisp, defined contrast.
+Updated App.js
+Here is your updated App.js with:
+   * shadowMap.enabled = true and PCFSoftShadowMap added to the renderer.
+   * Shadows enabled on this.dirLight by default.
+   * Global AmbientLight lowered from 0.8 to 0.3 to prevent washed-out shadows.
+// src/core/App.js
+import * as THREE from 'three';
+import { CameraManager } from './CameraManager.js';
+import { eventBus } from './EventBus.js';
+import { gameState } from './GameState.js'; // Use exported singleton
+import { audioManager } from './AudioManager.js';
+import { confettiVFX } from '../effects/ConfettiVFX.js';
+
+export class App {
+ constructor(canvas) {
+   this.canvas = canvas;
+   this.scene = new THREE.Scene();
+   this.scene.background = new THREE.Color(0x0f172a);
+
+   this.cameraManager = new CameraManager(window.innerWidth / window.innerHeight);
+   this.camera = this.cameraManager.camera;
+
+   // 1. WebGL Renderer Initialization
+   this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+   this.renderer.setSize(window.innerWidth, window.innerHeight);
+   this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+   // 🔑 ENABLE SHADOW MAP HERE
+   this.renderer.shadowMap.enabled = true;
+   this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Smooth soft shadow edges
+
+   this.raycaster = new THREE.Raycaster();
+   this.mouse = new THREE.Vector2();
+
+   this.scenes = {};
+   this.activeSceneKey = 'island';
+   this.uiManager = null; // 🟢 Stores UIManager reference
+
+   this.setupLighting();
+   this.setupListeners();
+ }
+
+ /**
+  * 🟢 Binds UIManager to App and links MapScene if already registered
+  */
+ setUIManager(uiManager) {
+   this.uiManager = uiManager;
+   if (this.scenes['map']) {
+     this.uiManager.setMapScene(this.scenes['map']);
+   }
+ }
+
+ setupLighting() {
+   // 💡 Lower ambient light intensity (was 0.8) so shadows don't get washed out
+   this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+   this.scene.add(this.ambientLight);
+
+   // ☀️ Main Directional Light with Shadows enabled by default
+   this.dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+   this.dirLight.position.set(10, 20, 15);
+   this.dirLight.castShadow = true;
+
+   // 🎯 Shadow Map Camera Configuration
+   this.dirLight.shadow.mapSize.width = 2048;
+   this.dirLight.shadow.mapSize.height = 2048;
+   this.dirLight.shadow.camera.near = 0.5;
+   this.dirLight.shadow.camera.far = 100;
+
+   const shadowBoxSize = 25;
+   this.dirLight.shadow.camera.left = -shadowBoxSize;
+   this.dirLight.shadow.camera.right = shadowBoxSize;
+   this.dirLight.shadow.camera.top = shadowBoxSize;
+   this.dirLight.shadow.camera.bottom = -shadowBoxSize;
+   this.dirLight.shadow.bias = -0.0005;
+
+   this.scene.add(this.dirLight);
+ }
+
+ registerScene(key, sceneInstance) {
+   this.scenes[key] = sceneInstance;
+   this.scene.add(sceneInstance.group);
+   sceneInstance.group.visible = false;
+
+   // 🟢 Auto-bind MapScene to window & UIManager when registered
+   if (key === 'map') {
+     window.mapScene = sceneInstance;
+     if (this.uiManager) {
+       this.uiManager.setMapScene(sceneInstance);
+     }
+   }
+ }
+
+ switchToScene(key) {
+   Object.keys(this.scenes).forEach(k => {
+     this.scenes[k].group.visible = (k === key);
+   });
+
+   this.activeSceneKey = key;
+
+   if (key === 'island') {
+     // Fixed: use gameState.currentIslandLevel instead of currentLevel
+     this.cameraManager.setIslandCamera(gameState.currentIslandLevel); 
+   } else if (key === 'spin') {
+     this.cameraManager.setSpinCamera();
+   } else if (key === 'map') {
+     this.cameraManager.setMapCamera();
+   } else if (key === 'box') {
+     this.cameraManager.setBoxCamera();
+   }
+ }
+
+ setupListeners() {
+   window.addEventListener('resize', () => {
+     this.cameraManager.updateAspect(window.innerWidth / window.innerHeight);
+     this.renderer.setSize(window.innerWidth, window.innerHeight);
+   });
+
+   window.addEventListener('click', (event) => {
+     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+     this.raycaster.setFromCamera(this.mouse, this.camera);
+
+     const activeScene = this.scenes[this.activeSceneKey];
+     if (activeScene && activeScene.handleClick) {
+       activeScene.handleClick(this.raycaster);
+     }
+   });
+
+   eventBus.on('SWITCH_SCENE', (key) => this.switchToScene(key));
+   
+   eventBus.on('MODE_CHANGED', (mode) => {
+     if (mode === 'polished') {
+       this.renderer.shadowMap.enabled = true;
+       this.dirLight.castShadow = true;
+       this.dirLight.intensity = 1.5;
+     } else {
+       this.renderer.shadowMap.enabled = false;
+       this.dirLight.castShadow = false;
+       this.dirLight.intensity = 1.2;
+     }
+   });
+ }
+
+ start() {
+   const animate = () => {
+     requestAnimationFrame(animate);
+
+     // 🟢 Update active scene (enables smooth OrbitControls damping in MapScene)
+     const activeScene = this.scenes[this.activeSceneKey];
+     if (activeScene && typeof activeScene.update === 'function') {
+       activeScene.update();
+     }
+
+     this.renderer.render(this.scene, this.camera);
+   };
+   animate();
+ }
+}
+
+________________
+
+
+User prompt: I like my current setup in my island scene(no background image) and skylight and idrectional light settings. can you propogate these settigns to other scenes. Or can you disable background image and just use the same skylight/skybox from the Island Scene?
+Response: Here is how to propagate the Island Scene lighting and procedural Sky setup across your other scenes (SpinScene, BoxOpeningScene, and MapScene).
+Step 1: Standardize LIGHTING_CONFIGS in LevelConfigs.js
+Update LevelConfigs.js so that spin and box share the exact same lighting and skylight values as island:
+// src/config/LevelConfigs.js
+
+export const LEVEL_CONFIGS = {
+ 1: {
+   id: 1,
+   title: "Level 1",
+   groundColor: 0x22c55e,
+   seaColor: 0x0284c7,
+   mapY: -4.0,
+   cameraPos: { x: 10, y: 10, z: 10 },
+   buildings: {
+     dock: { costs: [100, 160, 250, 400] },
+     lighthouse: { costs: [250, 400, 640, 1020] },
+     boat: { costs: [150, 240, 380, 600] }
+   }
+ },
+ 2: {
+   id: 2,
+   title: "Level 2",
+   groundColor: 0x10b981,
+   seaColor: 0x06b6d4,
+   mapY: 0.0,
+   cameraPos: { x: 10, y: 12, z: 10 },
+   buildings: {
+     dock: { costs: [200, 320, 500, 800] },
+     lighthouse: { costs: [500, 800, 1280, 2040] },
+     boat: { costs: [300, 480, 760, 1200] }
+   }
+ },
+ 3: {
+   id: 3,
+   title: "Level 3",
+   groundColor: 0x8b5cf6,
+   seaColor: 0x3b82f6,
+   mapY: 4.0,
+   cameraPos: { x: 10, y: 11, z: 10 },
+   buildings: {
+     dock: { costs: [400, 640, 1000, 1600] },
+     lighthouse: { costs: [1000, 1600, 2560, 4080] },
+     boat: { costs: [600, 960, 1520, 2400] }
+   }
+ }
+};
+
+// ☀️ Standardized island lighting profile across all scenes
+const UNIFORM_LIGHTING = {
+ backgroundColor: 0x87ceeb, // Sky blue
+ skylight: {
+   skyColor: 0xfaffff,
+   groundColor: 0x334155,
+   intensity: 0.3 // Kept low to maintain sharp directional shadow contrast
+ },
+ directional: {
+   color: 0xfffaed,
+   intensity: 1.0,
+   position: [10, 20, 15],
+   castShadow: true
+ }
+};
+
+export const LIGHTING_CONFIGS = {
+ island: UNIFORM_LIGHTING,
+ spin: UNIFORM_LIGHTING,
+ box: UNIFORM_LIGHTING
+};
+
+Step 2: Add THREE.Sky Skybox to SpinScene.js
+Import Sky from three/addons/objects/Sky.js and call setupSkybox() inside initScene():
+// src/scenes/SpinScene.js
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { BaseScene } from './BaseScene.js';
+import { WHEEL_REWARDS, SLICE_COUNT } from '../config/RewardsConfig.js';
+import { eventBus } from '../core/EventBus.js';
+import { gameState } from '../core/GameState.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+
+export class SpinScene extends BaseScene {
+ constructor() {
+   super();
+   this.isSpinning = false;
+   this.sliceAngle = (Math.PI * 2) / SLICE_COUNT;
+   this.gltfLoader = new GLTFLoader();
+
+   this.wheelGroup = new THREE.Group();
+   this.buttonGroup = new THREE.Group();
+   this.frameGroup = new THREE.Group();
+   this.envGroup = new THREE.Group();
+   this.pointerGroup = new THREE.Group();
+   
+   this.initScene();
+ }
+
+ async initScene() {
+   this.applyLightingConfig('spin');
+   this.setupSkybox(); // ☀️ Add procedural sky setup matching IslandScene
+   
+   this.group.position.set(0, 0, 2.6);
+
+   this.group.add(this.envGroup);
+   this.group.add(this.wheelGroup);
+   this.group.add(this.frameGroup);
+   this.group.add(this.buttonGroup);
+   this.group.add(this.pointerGroup);
+
+   this.buttonGroup.position.set(0, 0.3, 0);
+   this.frameGroup.position.set(0, 0.3, 0);
+   this.pointerGroup.position.set(0, 0.2, 0.3);
+
+   await Promise.all([
+     this.loadModel('./public/models/spin_scene_1.glb', this.envGroup),
+     this.loadModel('./public/models/spinner.glb', this.wheelGroup),
+     this.loadModel('./public/models/spin_button_frame.glb', this.frameGroup),
+     this.loadModel('./public/models/spin_button.glb', this.buttonGroup),
+     this.loadModel('./public/models/spinner_triangle.glb', this.pointerGroup)
+   ]);
+
+   this.buildRewardLabels();
+   this.buildSpinButtonText();
+ }
+
+ setupSkybox() {
+   const sky = new Sky();
+   sky.scale.setScalar(450000);
+   this.group.add(sky);
+
+   const skyUniforms = sky.material.uniforms;
+   skyUniforms['turbidity'].value = 2.2;
+   skyUniforms['rayleigh'].value = 0.1;
+   skyUniforms['mieCoefficient'].value = 0.003;
+   skyUniforms['mieDirectionalG'].value = 0.85;
+
+   const sunPosition = new THREE.Vector3();
+   const phi = THREE.MathUtils.degToRad(90 - 62);
+   const theta = THREE.MathUtils.degToRad(145);
+
+   sunPosition.setFromSphericalCoords(1, phi, theta);
+   skyUniforms['sunPosition'].value.copy(sunPosition);
+ }
+
+ // ... keep rest of SpinScene implementation unchanged ...
+}
+
+Step 3: Add THREE.Sky Skybox to BoxOpeningScene.js
+Import Sky and add setupSkybox() to BoxOpeningScene.js:
+// src/scenes/BoxOpeningScene.js
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { BaseScene } from './BaseScene.js';
+import { BOX_REWARDS_POOL } from '../config/RewardsConfig.js';
+import { AssetLoader } from '../loaders/AssetLoader.js';
+import { gameState } from '../core/GameState.js';
+import { eventBus } from '../core/EventBus.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+
+export class BoxOpeningScene extends BaseScene {
+ constructor() {
+   super();
+   this.boxObjects = [];
+   this.gltfLoader = new GLTFLoader();
+   this.buildScene();
+ }
+
+ async buildScene() {
+   this.applyLightingConfig('box');
+   this.setupSkybox(); // ☀️ Add procedural sky setup matching IslandScene
+
+   try {
+     const sceneGltf = await new Promise((resolve, reject) => {
+       this.gltfLoader.load(
+         './public/models/box_opening_scene_1.glb',
+         (gltf) => resolve(gltf),
+         undefined,
+         (err) => reject(err)
+       );
+     });
+     
+     const envScene = sceneGltf.scene;
+     envScene.traverse((child) => {
+       if (child.isMesh) {
+         child.castShadow = true;
+         child.receiveShadow = true;
+       }
+     });
+     this.group.add(envScene);
+   } catch (err) {
+     console.warn('box_opening_scene_1.glb not found or failed to load.', err);
+   }
+
+   // ... keep remaining chest building and interaction logic unchanged ...
+ }
+
+ setupSkybox() {
+   const sky = new Sky();
+   sky.scale.setScalar(450000);
+   this.group.add(sky);
+
+   const skyUniforms = sky.material.uniforms;
+   skyUniforms['turbidity'].value = 2.2;
+   skyUniforms['rayleigh'].value = 0.1;
+   skyUniforms['mieCoefficient'].value = 0.003;
+   skyUniforms['mieDirectionalG'].value = 0.85;
+
+   const sunPosition = new THREE.Vector3();
+   const phi = THREE.MathUtils.degToRad(90 - 62);
+   const theta = THREE.MathUtils.degToRad(145);
+
+   sunPosition.setFromSphericalCoords(1, phi, theta);
+   skyUniforms['sunPosition'].value.copy(sunPosition);
+ }
+}
+
+Step 4: Add THREE.Sky Skybox to MapScene.js
+Update MapScene.js to initialize the same sky box:
+// src/scenes/MapScene.js
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { BaseScene } from './BaseScene.js';
+import { LEVEL_CONFIGS } from '../config/LevelConfigs.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+
+export class MapScene extends BaseScene {
+ constructor() {
+   super();
+
+   this.gltfLoader = new GLTFLoader();
+   this.mapSceneMesh = null;
+   this.boatMesh = null;
+   this.mixer = null;
+   this.animations = [];
+   this.activeAction = null;
+
+   this.initScene();
+ }
+
+ async initScene() {
+   this.applyLightingConfig('spin');
+   this.setupSkybox(); // ☀️ Add procedural sky setup matching IslandScene
+
+   await Promise.all([
+     this.loadMapEnvironment('./public/models/map_scene.glb'),
+     this.loadBoatModel('./public/models/map_boat.glb')
+   ]);
+
+   if (!this.mapSceneMesh) {
+     this.buildProceduralFallbackMap();
+   }
+ }
+
+ setupSkybox() {
+   const sky = new Sky();
+   sky.scale.setScalar(450000);
+   this.group.add(sky);
+
+   const skyUniforms = sky.material.uniforms;
+   skyUniforms['turbidity'].value = 2.2;
+   skyUniforms['rayleigh'].value = 0.1;
+   skyUniforms['mieCoefficient'].value = 0.003;
+   skyUniforms['mieDirectionalG'].value = 0.85;
+
+   const sunPosition = new THREE.Vector3();
+   const phi = THREE.MathUtils.degToRad(90 - 62);
+   const theta = THREE.MathUtils.degToRad(145);
+
+   sunPosition.setFromSphericalCoords(1, phi, theta);
+   skyUniforms['sunPosition'].value.copy(sunPosition);
+ }
+
+ // ... keep remaining MapScene logic unchanged ...
+}
+
+Note on Environment GLTF Models: If spin_scene_1.glb or box_opening_scene_1.glb contain background wall/sky meshes from Blender, those meshes will sit in front of the Sky object and block it from view. If the background appears covered, inspect those loaded GLTF scenes and set visible = false on any backdrop/sky dome meshes.
+________________
+
+
+User prompt: now with the data you have about this project can you write a short readme for this project and export all the chat history?
+Response: While I don't have a direct button to export platform chat files to your local drive, I have compiled a full README.md project documentation file below that summarizes the architecture, setups, and systems configured during our work. You can copy and save this directly into your repository.
+🎮 Three.js Island & Minigame Web App
+A modular 3D web game built with Three.js and WebGL, featuring interactive island progression, minigames (Wheel Spin & Box Opening), custom lighting profiles, and event-driven audio management.
+🏗️ Architecture & Project Structure
+The application follows an object-oriented, scene-managed architecture:
+   * App.js: Central application entry point. Handles WebGLRenderer initialization, PCFSoftShadowMap configuration, canvas resizing, global lighting defaults, and active scene swapping via EventBus.
+   * CameraManager.js: Manages scene-specific orthographic/perspective camera positioning and smooth controls.
+   * AudioManager.js: Central Web Audio API manager. Loads sound manifests into memory buffers and routes playback through a global MasterGainNode (set to 50% volume).
+   * GameState.js: Singleton state manager tracking player keys, spins, level progression, and upgrade thresholds.
+   * LevelConfigs.js: Central configuration registry storing level progression costs, ground/sea color maps, camera vectors, and standardized LIGHTING_CONFIGS (skylight, directional shadow map properties) across all scenes.
+🎬 Scenes Overview
+🏝️ 1. IslandScene
+   * Renders base island GLTF terrain (island_1.glb) and building attachments (dock, lighthouse, boat).
+   * Supports dynamic building instantiation and smooth upgrades using elastic-out scale easing.
+   * Configures procedural environment lighting using THREE.Sky and directional sun shadows tuned for orthographic frustums.
+🎡 2. SpinScene
+   * Renders a 3D wheel minigame with interactive GLTF components (spinner.glb, spin_button.glb) and dynamic 2D canvas text textures mapped onto 3D planes.
+   * Handles button-press physics animations and mathematical easing for wheel rotation alignment.
+   * Integrates navigation guards preventing soft-locks while spins remain.
+📦 3. BoxOpeningScene
+   * Renders a 3x3 grid of interactable reward chests (chest.glb) with procedural fallbacks.
+   * Plays GLTF keyframe animations via THREE.AnimationMixer upon key usage and reveals reward textures hovering over opened chests.
+🗺️ 4. MapScene
+   * Renders world progression map environments (map_scene.glb) and ship travel models (map_boat.glb).
+   * Executes route travel animations using Blender NLA keyframe tracks (level1to2, level2to3).
+💡 Lighting & Shadow Configuration
+Lighting configurations are centralized in LevelConfigs.js to ensure consistent aesthetics:
+export const LIGHTING_CONFIGS = {
+ island: {
+   backgroundColor: 0x87ceeb,
+   skylight: {
+     skyColor: 0xfaffff,
+     groundColor: 0x334155,
+     intensity: 0.3 // Kept low to retain crisp shadow contrast
+   },
+   directional: {
+     color: 0xfffaed,
+     intensity: 1.0,
+     position: [10, 20, 15],
+     castShadow: true
+   }
+ }
+};
+
+Shadows require renderer.shadowMap.enabled = true on the WebGLRenderer in App.js, combined with child.castShadow and child.receiveShadow traversal flags on imported GLTF meshes.
+🔊 Audio Management
+Sound effects are emitted globally using the shared EventBus:
+// Triggering sound effects anywhere in scene code
+eventBus.emit('PLAY_SOUND', 'AU_Spin_Click');
+
+Master volume is globally capped at 0.5 inside AudioManager.js using a WebAudio GainNode:
+this.masterGain = this.ctx.createGain();
+this.masterGain.gain.value = 0.5;
+this.masterGain.connect(this.ctx.destination);
+
+🚀 Getting Started
+   1. Serve Files: Open the project root via any local HTTP web server (e.g., Live Server or npx serve .).
+   2. Assets: Ensure models (.glb) and sound files (.mp3) are placed inside ./public/models/ and ./public/sounds/.
+________________
+
+
+User prompt: I want to cleanup some settings and code that is scattered weirdly. Right now some cameras are controlled in LevelConfigs, and some are Camera configs. Can you move Island Camera settings from LevelConfigs to Camera manager and remove unnecessary settings in level configs?
+Response: Here is the cleaned-up code with all camera settings self-contained inside CameraManager.js and cameraPos removed from LevelConfigs.js.
+1. CameraManager.js
+CameraManager.js no longer depends on LevelConfigs.js. All camera configurations, including island level-specific positions, are now defined internally.
+// src/core/CameraManager.js
+import * as THREE from 'three';
+
+// 🎥 Island level camera preset configurations
+const ISLAND_CAMERA_CONFIGS = {
+ 1: { pos: { x: 15, y: 8, z: 15 }, fov: 60 },
+ 2: { pos: { x: 15, y: 8, z: 15 }, fov: 60 },
+ 3: { pos: { x: 15, y: 8, z: 15 }, fov: 60 }
+};
+
+export class CameraManager {
+ constructor(aspect) {
+   this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
+ }
+
+ setIslandCamera(level = 1) {
+   const config = ISLAND_CAMERA_CONFIGS[level] || ISLAND_CAMERA_CONFIGS[1];
+   
+   this.camera.fov = config.fov;
+   this.camera.up.set(0, 2, 0);
+   this.camera.position.set(config.pos.x, config.pos.y, config.pos.z);
+   this.camera.lookAt(0, 0, 0);
+   this.camera.updateProjectionMatrix();
+ }
+
+ setSpinCamera() {
+   this.camera.fov = 60;
+   this.camera.up.set(0, 0, -1);
+   this.camera.position.set(0, 5, 6);
+   this.camera.lookAt(0, 0, 0);
+   this.camera.updateProjectionMatrix();
+ }
+
+ setMapCamera() {
+   this.camera.fov = 60;
+   this.camera.up.set(0, 1, 0);
+   this.camera.position.set(0, 6, 6);
+   this.camera.lookAt(0, 0, 0);
+   this.camera.updateProjectionMatrix();
+ }
+
+ setBoxCamera() {
+   this.camera.fov = 55;
+   this.camera.up.set(0, 0, -1);
+   this.camera.position.set(0, 8, 12);
+   this.camera.lookAt(0, 0, 0.2);
+   this.camera.updateProjectionMatrix();
+ }
+
+ updateAspect(aspect) {
+   this.camera.aspect = aspect;
+   this.camera.updateProjectionMatrix();
+ }
+}
+
+2. LevelConfigs.js
+LevelConfigs.js is now strictly reserved for gameplay and level data (building costs, map Y offsets, ground/sea color definitions).
+// src/config/LevelConfigs.js
+
+export const LEVEL_CONFIGS = {
+ 1: {
+   id: 1,
+   title: "Level 1",
+   groundColor: 0x22c55e,
+   seaColor: 0x0284c7,
+   mapY: -4.0,
+   buildings: {
+     dock: { costs: [100, 160, 250, 400] },
+     lighthouse: { costs: [250, 400, 640, 1020] },
+     boat: { costs: [150, 240, 380, 600] }
+   }
+ },
+ 2: {
+   id: 2,
+   title: "Level 2",
+   groundColor: 0x10b981,
+   seaColor: 0x06b6d4,
+   mapY: 0.0,
+   buildings: {
+     dock: { costs: [200, 320, 500, 800] },
+     lighthouse: { costs: [500, 800, 1280, 2040] },
+     boat: { costs: [300, 480, 760, 1200] }
+   }
+ },
+ 3: {
+   id: 3,
+   title: "Level 3",
+   groundColor: 0x8b5cf6,
+   seaColor: 0x3b82f6,
+   mapY: 4.0,
+   buildings: {
+     dock: { costs: [400, 640, 1000, 1600] },
+     lighthouse: { costs: [1000, 1600, 2560, 4080] },
+     boat: { costs: [600, 960, 1520, 2400] }
+   }
+ }
+};
+
+// ☀️ Standardized island lighting profile across all scenes
+const UNIFORM_LIGHTING = {
+ backgroundColor: 0x87ceeb, // Sky blue
+ skylight: {
+   skyColor: 0xfaffff,
+   groundColor: 0x334155,
+   intensity: 0.3 // Kept low to maintain sharp directional shadow contrast
+ },
+ directional: {
+   color: 0xfffaed,
+   intensity: 1.0,
+   position: [10, 30, 15],
+   castShadow: true
+ }
+};
+
+export const LIGHTING_CONFIGS = {
+ island: UNIFORM_LIGHTING,
+ spin: UNIFORM_LIGHTING,
+ box: UNIFORM_LIGHTING
+};
+
+________________
+
+
+User prompt: One question, on some levels there seems to be more than one light that is casting shadows. Can you check that and point me to it?
+Response: Yes! You have double shadows because two separate Directional Lights are active simultaneously in your scenes.
+Here is where the extra lights are coming from:
+1. Global Light in App.js
+In App.js, you create a global directional light and add it directly to the root this.scene:
+// src/core/App.js
+setupLighting() {
+ this.dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+ this.dirLight.position.set(10, 20, 15);
+ this.dirLight.castShadow = true; // ⚠️ LIGHT #1 CASTING SHADOWS
+ this.scene.add(this.dirLight);
+}
+
+Because this.dirLight is added to this.scene, it remains active and shines on every active level/scene in your game.
+2. Scene-Specific Lights
+At the same time, every scene creates its own local Directional Light inside this.group:
+   * IslandScene.js: initLighting() creates this.sunLight with castShadow = true at position [10, 30, 15].
+   * SpinScene.js & MapScene.js: Call this.applyLightingConfig('spin'), which creates a local DirectionalLight with castShadow: true based on LIGHTING_CONFIGS.spin.
+   * BoxOpeningScene.js: Calls this.applyLightingConfig('box'), which creates a local DirectionalLight with castShadow: true based on LIGHTING_CONFIGS.box.
+🎯 Why This Causes Double Shadows
+When IslandScene (or any other scene) is loaded, Three.js renders:
+   1. Light #1: The global dirLight from App.js casting a shadow.
+   2. Light #2: The scene's local sunLight / directional light casting a second shadow from a slightly different angle/position.
+🛠️ The Fix
+You should remove the dirLight from App.js so that App.js only provides low ambient light, letting each individual scene manage its own key sun light via LIGHTING_CONFIGS.
+In App.js:
+setupLighting() {
+ // Only keep AmbientLight globally so scene shadow areas aren't pitch black
+ this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+ this.scene.add(this.ambientLight);
+
+ // ❌ REMOVE or COMMENT OUT this.dirLight from App.js:
+ // this.dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+ // this.dirLight.castShadow = true;
+ // this.scene.add(this.dirLight);
+}
+
+Once this.dirLight is removed from App.js, each level will rely solely on its own configured light in LIGHTING_CONFIGS, giving you a single, clean shadow.
+________________
+
+
+User prompt: everything went pitch black
+Response: Don't panic—this is a classic WebGL moment! When a Three.js scene turns completely pitch black after removing a main light, it almost always comes down to one of two specific culprits: a JavaScript execution crash or camera clipping.
+1. Cause A: Script Crash in App.js (Most Likely)
+In your App.js file, the MODE_CHANGED event listener still tries to access this.dirLight:
+// ❌ THIS IS CRASHING YOUR CODE if this.dirLight was removed!
+eventBus.on('MODE_CHANGED', (mode) => {
+ if (mode === 'polished') {
+   this.renderer.shadowMap.enabled = true;
+   this.dirLight.castShadow = true; // 💥 Uncaught TypeError: Cannot set properties of undefined
+   this.dirLight.intensity = 1.5;
+ }
+ ...
+});
+
+Because this.dirLight no longer exists, triggering MODE_CHANGED throws a TypeError in your browser console, halting the render loop entirely and freezing the screen on a black canvas.
+🛠️ Fix for App.js:
+Update setupListeners() in App.js to remove the references to this.dirLight:
+eventBus.on('MODE_CHANGED', (mode) => {
+ if (mode === 'polished') {
+   this.renderer.shadowMap.enabled = true;
+ } else {
+   this.renderer.shadowMap.enabled = false;
+ }
+});
+
+2. Cause B: THREE.Sky is Outside the Camera's Far Clipping Plane
+In CameraManager.js, your camera's far clipping plane is set to 1000:
+this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000); // Max view distance = 1000
+
+However, in setupSkybox(), the procedural sky dome is scaled to 450,000 units:
+const sky = new Sky();
+sky.scale.setScalar(450000); // ❌ 450,000 is way past 1,000!
+
+Because 450,000 is far beyond the camera's 1000 view distance limit, Three.js completely clips and discards the sky dome, falling back to this.scene.background = 0x0f172a (which is dark slate black).
+🛠️ Fix for CameraManager.js:
+Increase the camera's far clipping plane in CameraManager.js so it can render the sky dome:
+// src/core/CameraManager.js
+export class CameraManager {
+ constructor(aspect) {
+   // 💡 Increased far clipping plane from 1000 to 500,000
+   this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 500000);
+ }
+ ...
+}
+
+(Alternatively, you can shrink sky.scale.setScalar(900) inside your scene files so it fits within a smaller camera range).
+Summary Checklist to Get Lights Back On:
+   1. Open your Browser Developer Console (F12 or Cmd + Option + I) to verify if a JS error crashed the frame loop.
+   2. Remove this.dirLight references inside App.js.
+   3. Update PerspectiveCamera far plane to 500000 in CameraManager.js.
+________________
+
+
+User prompt: still getting this error after commention out    //this.dirLight = new THREE.DirectionalLight(0xffffff, 1.2);     //this.dirLight.position.set(10, 20, 15);     //this.dirLight.castShadow = true; in app.js. Uncaught TypeError: Cannot read properties of undefined (reading 'shadow') at App.setupLighting (App.js:59:19) at new App (App.js:34:10) at main.js:14:13 (anonymous)@App.js:59(anonymous)@App.js:34(anonymous)@main.js:14
+Response: That stack trace tells us exactly what happened!
+When you commented out this.dirLight = new THREE.DirectionalLight(...), the lines immediately following it inside setupLighting() were still trying to configure this.dirLight.shadow.mapSize and this.dirLight.shadow.camera. Because this.dirLight no longer exists (undefined), trying to read undefined.shadow throws that error.
+The Fix for App.js
+Replace your setupLighting() and setupListeners() in App.js with these cleaned-up versions that completely remove all dirLight setup:
+  setupLighting() {
+   // 💡 Only keep global AmbientLight here so shadow areas aren't pitch black.
+   // Each individual scene handles its own primary sun light and shadows via LIGHTING_CONFIGS!
+   this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+   this.scene.add(this.ambientLight);
+ }
+
+And in setupListeners():
+  setupListeners() {
+   window.addEventListener('resize', () => {
+     this.cameraManager.updateAspect(window.innerWidth / window.innerHeight);
+     this.renderer.setSize(window.innerWidth, window.innerHeight);
+   });
+
+   window.addEventListener('click', (event) => {
+     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+     this.raycaster.setFromCamera(this.mouse, this.camera);
+
+     const activeScene = this.scenes[this.activeSceneKey];
+     if (activeScene && activeScene.handleClick) {
+       activeScene.handleClick(this.raycaster);
+     }
+   });
+
+   eventBus.on('SWITCH_SCENE', (key) => this.switchToScene(key));
+   
+   // Toggle global shadow map rendering without touching scene-specific lights
+   eventBus.on('MODE_CHANGED', (mode) => {
+     this.renderer.shadowMap.enabled = (mode === 'polished');
+   });
+ }
+
+Once you update those two methods in App.js, reload the page. The app will boot cleanly and each scene will draw its single, correct shadow using its own local light.
+________________
+
+
+User prompt: Now I will feed the files and folder structure to you, can you write a short summary of the project and how it works without fluff and overly long sentences?
+Response: Here is a direct, fluff-free breakdown of your project architecture and how the components interact.
+🧭 Project Summary
+This project is an interactive, modular 3D web application built with Three.js and WebGL using standard ES Modules. It uses a single global canvas and switches between distinct 3D scenes via an event-driven system.
+⚙️ Core Architecture & Execution Flow
+1. Application Core (App.js)
+   * Initializes the WebGLRenderer, enables soft shadow maps (PCFSoftShadowMap), and handles window resizing.
+   * Configures global ambient lighting so unlit areas remain visible.
+   * Listens to SWITCH_SCENE events via EventBus to show or hide scene groups.
+   * Runs the main animation loop (requestAnimationFrame) to render the active scene.
+2. Camera Management (CameraManager.js)
+   * Houses a single PerspectiveCamera shared across the app.
+   * Stores preset camera positions, target look-at points, and field-of-view values for each scene.
+   * Dynamically positions the view when changing scenes or island levels.
+3. State & Sound (GameState.js, AudioManager.js)
+   * GameState.js: Tracks player progress, keys, spins, and upgrade costs.
+   * AudioManager.js: Decodes .mp3 files via Web Audio API. All sounds route through a master GainNode set to 50% volume.
+4. Configuration Registry (LevelConfigs.js)
+   * Stores level data including Y-offsets, sea/ground colors, and building upgrade cost curves.
+   * Defines standardized LIGHTING_CONFIGS (skylight and directional shadow properties) shared across scenes.
+🎬 Scene Subsystems
+BaseScene
+├── IslandScene      (Main gameplay & building upgrades)
+├── SpinScene        (Wheel minigame)
+├── BoxOpeningScene  (3x3 chest reward minigame)
+└── MapScene         (Level transition map)
+
+   * IslandScene: Loads the island terrain GLTF and spawns buildings (dock, lighthouse, boat) with elastic scale animations upon upgrading.
+   * SpinScene: Renders a interactive wheel minigame with dynamic 2D canvas labels. Eases wheel rotation to align with randomly selected rewards.
+   * BoxOpeningScene: Renders a 3x3 grid of interactive GLTF chests. Plays Blender opening animations via AnimationMixer and displays hovering rewards.
+   * MapScene: Displays island progression paths and plays boat travel animations using Blender NLA keyframe tracks.
+________________
+
+
+User prompt: The project itself is structured thus: sett-ai-test-assignment ├── public └── src ├── assets ├── config          ├── core          ├──effects          ├──effects          ├──effects The project itself is structured thus: sett-ai-test-assignment ├── public └── src ├── assets ├── config          ├── core          ├──effects          ├──laoders          ├──scenes ├──ui main.js styl.css Can you also include that the when the root link is opened. You are given two choices (primitive version and styled version). And also better version of the folder structure of the project?
+Response: 📁 Folder Structure
+sett-ai-test-assignment/
+├── index.html              # Main HTML entry point & DOM UI container
+├── style.css               # HUD overlay styling & layout rules
+├── public/                 # Static assets (3D .glb models, .mp3 audio)
+└── src/
+   ├── main.js             # Application bootstrapper
+   ├── config/             # Level balance, reward pools, & lighting presets
+   ├── core/               # Main engine loop, camera, audio, & state
+   ├── effects/            # Canvas 2D particle systems (Confetti VFX)
+   ├── loaders/            # GLTF loader with caching & canvas text generator
+   ├── scenes/             # BaseScene & sub-scene implementations
+   └── ui/                 # DOM event bindings & HUD controllers
+
+🚀 Entry Point & Visual Modes
+When loading the root application, users can select between two rendering modes via the UI mode toggle:
+   * Primitive Version: Disables soft shadow mapping (shadowMap.enabled = false) and relies on basic fallback geometry and unstyled lighting for maximum performance.
+   * Styled (Polished) Version: Enables soft shadow mapping (PCFSoftShadowMap), detailed GLTF environment models, procedural sky shaders (THREE.Sky), and custom building animations.
+⚙️ Core Architecture & Execution Flow
+1. Root & Core Architecture (/src/core)
+   * index.html & main.js: Renders a fixed WebGL canvas (#game-canvas) beneath an interactive 2D HUD layer (#ui-container).
+   * App.js: Holds the global WebGLRenderer, manages the main animation loop (requestAnimationFrame), and toggles scene visibility via EventBus.
+   * CameraManager.js: Houses a single PerspectiveCamera with preset FOVs and positions for each scene.
+   * GameState.js: Singleton managing coins, spins, keys, and building level calculations.
+   * AudioManager.js: Decodes .mp3 files into Web Audio API memory buffers and routes all sounds through a master gain node.
+   * EventBus.js: Lightweight pub/sub emitter decoupling UI, audio, and WebGL events.
+2. Scene Architecture (/src/scenes)
+All scenes inherit from BaseScene and are registered to App.js:
+   * IslandScene: Manages current island upgrades, GLTF building instantiation, and elastic scaling animations.
+   * SpinScene: Renders an interactive wheel with canvas text labels and programmatic rotation easing.
+   * BoxOpeningScene: Displays a 3x3 grid of GLTF chest models with skeletal opening animations.
+   * MapScene: Renders world navigation paths and runs boat travel keyframe clips.
+3. Utility Modules (/src/config, /src/loaders, /src/effects)
+   * LevelConfigs.js: Defines per-island upgrade costs, sea/ground colors, and scene lighting parameters (skylight and directional).
+   * AssetLoader.js: Caches loaded GLTF models to eliminate redundant network requests.
+   * ConfettiVFX.js: Plays 2D canvas particle explosions upon completing an island.
+________________
+
+
+User prompt: can you give this in styled md file format to me?
+Response: # 🏝️ Sett AI Test Assignment — Architecture Overview
+
+> A modular, event-driven 3D WebGL application built with **Three.js** and standard ES Modules.
+
+---
+
+## 📁 Folder Structure
+
+```text
+sett-ai-test-assignment/
+├── index.html              # Main HTML entry point & DOM UI container
+├── style.css               # HUD overlay styling & layout rules
+├── public/                 # Static assets (3D .glb models, .mp3 audio)
+└── src/
+   ├── main.js             # Application bootstrapper
+   ├── config/             # Level balance, reward pools, & lighting presets
+   ├── core/               # Main engine loop, camera, audio, & state
+   ├── effects/            # Canvas 2D particle systems (Confetti VFX)
+   ├── loaders/            # GLTF loader with caching & canvas text generator
+   ├── scenes/             # BaseScene & sub-scene implementations
+   └── ui/                 # DOM event bindings & HUD controllers
+
+🚀 Entry Point & Rendering Modes
+When opening the root link, the application provides two rendering modes via the UI mode toggle:
+   * Primitive Version: Disables soft shadow mapping (shadowMap.enabled = false) and relies on basic fallback geometry with unstyled lighting for maximum performance.
+   * Styled (Polished) Version: Enables soft shadow mapping (PCFSoftShadowMap), detailed GLTF environment models, procedural sky shaders (THREE.Sky), and custom building animations.
+⚙️ Core Architecture & Execution Flow
+1. Root Engine & Singletons (/src/core)
+
+
+Module
+	Responsibilities
+	index.html & main.js
+	Renders a fixed WebGL canvas (#game-canvas) beneath an interactive 2D HUD layer (#ui-container).
+	App.js
+	Manages the global WebGLRenderer, main animation loop (requestAnimationFrame), and toggles scene visibility via EventBus.
+	CameraManager.js
+	Houses a single PerspectiveCamera with preset FOVs and positions tailored for each scene.
+	GameState.js
+	Singleton tracking player currency (coins, spins, keys) and calculating building upgrade cost curves.
+	AudioManager.js
+	Decodes .mp3 files into Web Audio API buffers and routes audio through a global master gain node (locked at 50% volume).
+	EventBus.js
+	Lightweight pub/sub event emitter that decouples UI, audio, and WebGL scene events.
+	2. Scene Subsystems (/src/scenes)
+All game scenes inherit from BaseScene and are registered to App.js:
+   * IslandScene: Controls main gameplay terrain, building spawning (dock, lighthouse, boat), and elastic bounce scale animations.
+   * SpinScene: Renders an interactive 3D prize wheel with dynamic 2D canvas labels and smooth programmatic rotation easing.
+   * BoxOpeningScene: Displays a 3x3 grid of interactive GLTF chests using Blender skeletal keyframe animations via AnimationMixer.
+   * MapScene: Handles world map progression paths and runs boat travel animations driven by Blender NLA tracks.
+3. Utilities & Support Modules (/src/...)
+   * LevelConfigs.js (/src/config): Centralized repository defining per-level upgrade costs, sea/ground colors, and standardized scene lighting configurations (skylight & directional).
+   * AssetLoader.js (/src/loaders): Asynchronous GLTF loader with built-in caching to prevent redundant network requests.
+   * ConfettiVFX.js (/src/effects): Canvas 2D particle system triggered upon completing an island.
+
+
+________________
+
+
+User prompt: please give me previous chat text as md format, not just the folder structure
+Response: # 🏝️ Sett AI Test Assignment — Architecture Overview
+
+> A modular, event-driven 3D WebGL application built with **Three.js** and standard ES Modules[cite: 6, 7].
+
+---
+
+## 🧭 Project Summary
+
+This project is an interactive 3D web application using a single WebGL canvas beneath a DOM UI overlay[cite: 6, 7]. It switches seamlessly between dedicated 3D scenes (Island, Spin Wheel, Box Opening, and World Map) powered by an event-driven system[cite: 7, 10].
+
+---
+
+## 📁 Folder Structure
+
+```text
+sett-ai-test-assignment/
+├── index.html              # Main HTML entry point & DOM UI container
+├── style.css               # HUD overlay styling & layout rules
+├── public/                 # Static assets (3D .glb models, .mp3 audio)
+└── src/
+   ├── main.js             # Application bootstrapper
+   ├── config/             # Level balance, reward pools, & lighting presets
+   ├── core/               # Main engine loop, camera, audio, & state
+   ├── effects/            # Canvas 2D particle systems (Confetti VFX)
+   ├── loaders/            # GLTF loader with caching & canvas text generator
+   ├── scenes/             # BaseScene & sub-scene implementations
+   └── ui/                 # DOM event bindings & HUD controllers
+
+🚀 Entry Point & Rendering Modes
+When opening the root application, the user interacts with a 2D HUD overlaid on top of the 3D WebGL canvas. The engine supports two rendering modes via the UI mode toggle:
+   * Primitive Version: Disables shadow mapping (shadowMap.enabled = false) for lightweight performance.
+   * Styled (Polished) Version: Enables soft shadow mapping (PCFSoftShadowMap), procedural sky shaders (THREE.Sky), GLTF environment models, and custom animations.
+⚙️ Core Architecture & Execution Flow
+1. Root Engine & Singletons (/src/core)
+   * index.html & main.js: Defines the canvas element (#game-canvas) and HUD overlays (#ui-container) before bootstrapping the app.
+   * App.js: Initializes the global WebGLRenderer, manages the main animation frame loop (requestAnimationFrame), and handles scene visibility toggling via EventBus.
+   * CameraManager.js: Houses a single PerspectiveCamera with preset field-of-view, position, and orientation configurations for each active scene.
+   * GameState.js: Global singleton tracking player resources (coins, spins, keys), upgrade cost formulas, and island completion rules.
+   * AudioManager.js: Decodes .mp3 audio files into Web Audio API buffers and routes sound output through a master gain node set to 50% volume.
+   * EventBus.js: Centralized pub/sub event emitter decoupling UI triggers, audio playback, and 3D scene transitions.
+2. Scene Subsystems (/src/scenes)
+All interactive scenes extend a common base scene and are registered directly to App.js:
+   * IslandScene: Renders island terrain, handles building placement (dock, lighthouse, boat), and performs elastic bounce scale animations upon upgrading.
+   * SpinScene: Renders a 3D prize wheel featuring dynamic 2D canvas text labels and programmatic rotation easing to award coins, spins, or chest keys.
+   * BoxOpeningScene: Renders a 3x3 grid of GLTF chest models using Blender skeletal keyframe animations via AnimationMixer to reveal random rewards.
+   * MapScene: Displays island progression paths and executes boat travel animations driven by Blender NLA keyframe tracks.
+3. Utilities & Support Modules (/src/...)
+   * LevelConfigs.js (/src/config): Defines per-island building cost curves, environment ground/sea colors, and standardized scene lighting configurations (skylight & directional).
+   * AssetLoader.js (/src/loaders): Asynchronously loads and caches GLTF 3D models to eliminate duplicate network requests.
+   * ConfettiVFX.js (/src/effects): Manages a 2D canvas particle explosion triggered on celebration events.
+
+
+________________
+
+
+User prompt: 🚀 Entry Point & Rendering Modes When opening the root application, the user interacts with a 2D HUD overlaid on top of the 3D WebGL canvas. The engine supports two rendering modes via the UI mode toggle: Primitive Version: Disables shadow mapping (shadowMap.enabled = false) for lightweight performance. Styled (Polished) Version: Enables soft shadow mapping (PCFSoftShadowMap), procedural sky shaders (THREE.Sky), GLTF environment models, and custom animations. ⚙️ Core Architecture & Execution Flow 1. Root Engine & Singletons (/src/core) index.html & main.js: Defines the canvas element (#game-canvas) and HUD overlays (#ui-container) before bootstrapping the app. App.js: Initializes the global WebGLRenderer, manages the main animation frame loop (requestAnimationFrame), and handles scene visibility toggling via EventBus. CameraManager.js: Houses a single PerspectiveCamera with preset field-of-view, position, and orientation configurations for each active scene. GameState.js: Global singleton tracking player resources (coins, spins, keys), upgrade cost formulas, and island completion rules. AudioManager.js: Decodes .mp3 audio files into Web Audio API buffers and routes sound output through a master gain node set to 50% volume. EventBus.js: Centralized pub/sub event emitter decoupling UI triggers, audio playback, and 3D scene transitions. 2. Scene Subsystems (/src/scenes) All interactive scenes extend a common base scene and are registered directly to App.js: IslandScene: Renders island terrain, handles building placement (dock, lighthouse, boat), and performs elastic bounce scale animations upon upgrading. SpinScene: Renders a 3D prize wheel featuring dynamic 2D canvas text labels and programmatic rotation easing to award coins, spins, or chest keys. BoxOpeningScene: Renders a 3x3 grid of GLTF chest models using Blender skeletal keyframe animations via AnimationMixer to reveal random rewards. MapScene: Displays island progression paths and executes boat travel animations driven by Blender NLA keyframe tracks. 3. Utilities & Support Modules (/src/...) LevelConfigs.js (/src/config): Defines per-island building cost curves, environment ground/sea colors, and standardized scene lighting configurations (skylight & directional). AssetLoader.js (/src/loaders): Asynchronously loads and caches GLTF 3D models to eliminate duplicate network requests. ConfettiVFX.js (/src/effects): Manages a 2D canvas particle explosion triggered on celebration events. I mean this text as markdown style,
+Response: ## 🚀 Entry Point & Rendering Modes
+
+When opening the root application, the user interacts with a **2D HUD** overlaid on top of the **3D WebGL canvas**. The engine supports two rendering modes via the UI mode toggle:
+
+* **Primitive Version**: Disables shadow mapping (`shadowMap.enabled = false`) for lightweight performance.
+* **Styled (Polished) Version**: Enables soft shadow mapping (`PCFSoftShadowMap`), procedural sky shaders (`THREE.Sky`), GLTF environment models, and custom animations.
+
+---
+
+## ⚙️ Core Architecture & Execution Flow
+
+### 1. Root Engine & Singletons (`/src/core`)
+
+* **`index.html` & `main.js`**: Defines the canvas element (`#game-canvas`) and HUD overlays (`#ui-container`) before bootstrapping the app.
+* **`App.js`**: Initializes the global `WebGLRenderer`, manages the main animation frame loop (`requestAnimationFrame`), and handles scene visibility toggling via `EventBus`.
+* **`CameraManager.js`**: Houses a single `PerspectiveCamera` with preset field-of-view, position, and orientation configurations for each active scene.
+* **`GameState.js`**: Global singleton tracking player resources (coins, spins, keys), upgrade cost formulas, and island completion rules.
+* **`AudioManager.js`**: Decodes `.mp3` audio files into Web Audio API buffers and routes sound output through a master gain node set to 50% volume.
+* **`EventBus.js`**: Centralized pub/sub event emitter decoupling UI triggers, audio playback, and 3D scene transitions.
+
+---
+
+### 2. Scene Subsystems (`/src/scenes`)
+
+All interactive scenes extend a common base scene and are registered directly to `App.js`:
+
+* **`IslandScene`**: Renders island terrain, handles building placement (`dock`, `lighthouse`, `boat`), and performs elastic bounce scale animations upon upgrading.
+* **`SpinScene`**: Renders a 3D prize wheel featuring dynamic 2D canvas text labels and programmatic rotation easing to award coins, spins, or chest keys.
+* **`BoxOpeningScene`**: Renders a 3x3 grid of GLTF chest models using Blender skeletal keyframe animations via `AnimationMixer` to reveal random rewards.
+* **`MapScene`**: Displays island progression paths and executes boat travel animations driven by Blender NLA keyframe tracks.
+
+---
+
+### 3. Utilities & Support Modules (`/src/...`)
+
+* **`LevelConfigs.js` (`/src/config`)**: Defines per-island building cost curves, environment ground/sea colors, and standardized scene lighting configurations (`skylight` & `directional`).
+* **`AssetLoader.js` (`/src/loaders`)**: Asynchronously loads and caches GLTF 3D models to eliminate duplicate network requests.
+* **`ConfettiVFX.js` (`/src/effects`)**: Manages a 2D canvas particle explosion triggered on celebration events.
+
+________________

@@ -1,0 +1,30 @@
+{
+  "name": "sett-ai-test-assignment",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^8.1.1"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "description": "* **Primitive Version**: Only for seeing the game logic.\r * **Styled FOF Version**: Includes custom models, keyframe animations, basic lighting setup, decoupled system to easily manage systems, scenes and gameplay.\r ---\r ## How to play\r * 1 - **Open the Visual Studio Project**\r * 2 - **Terminal > New Terminal**\r * 3 - **npm install** and **npm run dev**\r ---\r ##  Folder Structure",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raminres/threejs-casual-game.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/raminres/threejs-casual-game/issues"
+  },
+  "homepage": "https://github.com/raminres/threejs-casual-game#readme"
+}
